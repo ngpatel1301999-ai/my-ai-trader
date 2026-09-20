@@ -1,0 +1,8 @@
+.env
+*.log
+KILLSWITCH
+__pycache__/
+sample_*.csv
+memory.json
+user_profile.json
+brief_*.md
