@@ -29,7 +29,7 @@
    "at_time": "",
    "exclusive": true,
    "cancel_on_done": [],
-   "status": "open",
+   "status": "cancelled",
    "created": "2026-09-19 21:35",
    "result": ""
   },
@@ -45,7 +45,7 @@
    "at_time": "",
    "exclusive": true,
    "cancel_on_done": [],
-   "status": "open",
+   "status": "cancelled",
    "created": "2026-09-20 12:18",
    "result": ""
   },

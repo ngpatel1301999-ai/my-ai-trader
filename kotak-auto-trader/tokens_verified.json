@@ -70,5 +70,9 @@
  "mcx_fo:GOLD": {
   "trading": "GOLDM05JAN27FUT",
   "token": "578779"
+ },
+ "ITI": {
+  "trading": "ITI-EQ",
+  "token": "1675"
  }
 }
