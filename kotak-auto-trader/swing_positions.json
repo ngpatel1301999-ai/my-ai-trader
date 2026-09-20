@@ -1,0 +1,47 @@
+{
+ "TATAPOWER-EQ": {
+  "side": "B",
+  "qty": 500,
+  "remaining": 500,
+  "entry": 367.65,
+  "token": "3426",
+  "date_in": "2026-09-18",
+  "sessions": 2,
+  "sl": 360.3,
+  "t1px": 386.03,
+  "t2px": 397.06,
+  "t1_done": false,
+  "mode": "paper",
+  "style": "sid44"
+ },
+ "RPOWER-EQ": {
+  "side": "B",
+  "qty": 500,
+  "remaining": 500,
+  "entry": 21.14,
+  "token": "15259",
+  "date_in": "2026-09-18",
+  "sessions": 2,
+  "sl": 20.72,
+  "t1px": 22.2,
+  "t2px": 22.83,
+  "t1_done": false,
+  "mode": "paper",
+  "style": "sid44"
+ },
+ "HDFCBANK-EQ": {
+  "side": "B",
+  "qty": 20,
+  "remaining": 20,
+  "entry": 731.2,
+  "token": "1333",
+  "date_in": "2026-09-18",
+  "sessions": 0,
+  "sl": 681.9,
+  "t1px": 829.8,
+  "t2px": 879.1,
+  "t1_done": false,
+  "mode": "paper",
+  "style": "sid44"
+ }
+}

@@ -1,0 +1,5 @@
+date_in,symbol,qty,entry,date_out,exit,reason,pnl,pnl_pct,win
+2026-09-17,SBIN-EQ,10,986.5,2026-09-18,989.8,Telegram /squareoff,33.0,0.33,1
+2026-09-18,TATAPOWER-EQ,27,367.0,2026-09-18,367.4,Telegram /squareoff,10.8,0.11,1
+2026-09-18,SBIN-EQ,10,991.4,2026-09-18,992.8,TASK #3,14.0,0.14,1
+2026-09-18,RPOWER-EQ,472,21.18,2026-09-18,21.26,TASK #3,37.76,0.38,1

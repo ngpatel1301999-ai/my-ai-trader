@@ -1,0 +1,93 @@
+{
+ "next_id": 7,
+ "tasks": [
+  {
+   "id": 1,
+   "kind": "price_above",
+   "action": "notify",
+   "symbol": "TCS",
+   "level": 4500.0,
+   "qty": 0,
+   "note": "Alert for TCS swing buy",
+   "expires": null,
+   "at_time": null,
+   "status": "cancelled",
+   "created": "2026-09-17 23:07",
+   "result": ""
+  },
+  {
+   "id": 2,
+   "kind": "pnl_above",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 950.0,
+   "qty": 0,
+   "note": "square off all if open profit >= 950",
+   "expires": "",
+   "at_time": "",
+   "status": "cancelled",
+   "created": "2026-09-18 12:03",
+   "result": ""
+  },
+  {
+   "id": 3,
+   "kind": "pnl_above",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 50.0,
+   "qty": 0,
+   "note": "square off all if open profit >= 50",
+   "expires": "",
+   "at_time": "",
+   "status": "done",
+   "created": "2026-09-18 13:42",
+   "result": "Swing: closed 2 position(s)."
+  },
+  {
+   "id": 4,
+   "kind": "pnl_above",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 50.0,
+   "qty": 0,
+   "note": "square off all if open profit >= 50",
+   "expires": "",
+   "at_time": "",
+   "status": "done",
+   "created": "2026-09-18 13:57",
+   "result": "Swing: no positions."
+  },
+  {
+   "id": 5,
+   "kind": "pnl_pct_above",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 2.0,
+   "qty": 0,
+   "note": "square off all if book profit >= 2%",
+   "expires": "",
+   "at_time": "",
+   "exclusive": true,
+   "cancel_on_done": [],
+   "status": "open",
+   "created": "2026-09-18 15:26",
+   "result": ""
+  },
+  {
+   "id": 6,
+   "kind": "pnl_pct_below",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 1.0,
+   "qty": 0,
+   "note": "square off all if book loss >= 1%",
+   "expires": "",
+   "at_time": "",
+   "exclusive": true,
+   "cancel_on_done": [],
+   "status": "open",
+   "created": "2026-09-18 15:26",
+   "result": ""
+  }
+ ]
+}

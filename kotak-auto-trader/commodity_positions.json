@@ -1,0 +1,12 @@
+{
+ "GOLD": {
+  "qty": 100.0,
+  "entry": 4394.0,
+  "sl": 4306.12,
+  "t1": 4613.7,
+  "ccy": "USD",
+  "unit": "oz",
+  "yahoo": "GC=F",
+  "mode": "paper"
+ }
+}

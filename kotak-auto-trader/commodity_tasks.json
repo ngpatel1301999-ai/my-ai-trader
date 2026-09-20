@@ -1,0 +1,69 @@
+{
+ "next_id": 5,
+ "tasks": [
+  {
+   "id": 1,
+   "kind": "pnl_pct_above",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 2.0,
+   "qty": 0,
+   "note": "commodity profit >= 2%",
+   "expires": "",
+   "at_time": "",
+   "exclusive": true,
+   "cancel_on_done": [],
+   "status": "open",
+   "created": "2026-09-19 20:56",
+   "result": ""
+  },
+  {
+   "id": 2,
+   "kind": "pnl_pct_above",
+   "action": "squareoff_all",
+   "symbol": "",
+   "level": 2.0,
+   "qty": 0,
+   "note": "commodity profit >= 2%",
+   "expires": "",
+   "at_time": "",
+   "exclusive": true,
+   "cancel_on_done": [],
+   "status": "open",
+   "created": "2026-09-19 21:35",
+   "result": ""
+  },
+  {
+   "id": 3,
+   "kind": "pnl_pct_above",
+   "action": "sell",
+   "symbol": "GOLD",
+   "level": 2.0,
+   "qty": 0,
+   "note": "GOLD profit >= 2%",
+   "expires": "",
+   "at_time": "",
+   "exclusive": true,
+   "cancel_on_done": [],
+   "status": "open",
+   "created": "2026-09-20 12:18",
+   "result": ""
+  },
+  {
+   "id": 4,
+   "kind": "pnl_pct_below",
+   "action": "sell",
+   "symbol": "GOLD",
+   "level": 1.0,
+   "qty": 0,
+   "note": "GOLD loss >= 1%",
+   "expires": "",
+   "at_time": "",
+   "exclusive": true,
+   "cancel_on_done": [],
+   "status": "open",
+   "created": "2026-09-20 12:18",
+   "result": ""
+  }
+ ]
+}

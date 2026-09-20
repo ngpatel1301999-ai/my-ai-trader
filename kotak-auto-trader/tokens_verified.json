@@ -1,0 +1,74 @@
+{
+ "RELIANCE": {
+  "trading": "RELIANCE-EQ",
+  "token": "2885"
+ },
+ "INFY": {
+  "trading": "INFY-EQ",
+  "token": "1594"
+ },
+ "TCS": {
+  "trading": "TCS-EQ",
+  "token": "11536"
+ },
+ "HDFCBANK": {
+  "trading": "HDFCBANK-EQ",
+  "token": "1333"
+ },
+ "TMPV": {
+  "trading": "TMPV-EQ",
+  "token": "3456"
+ },
+ "TMCV": {
+  "trading": "TMCV-EQ",
+  "token": "759782"
+ },
+ "SBIN": {
+  "trading": "SBIN-EQ",
+  "token": "3045"
+ },
+ "ICICIBANK": {
+  "trading": "ICICIBANK-EQ",
+  "token": "4963"
+ },
+ "LT": {
+  "trading": "LT-EQ",
+  "token": "11483"
+ },
+ "ITC": {
+  "trading": "ITC-EQ",
+  "token": "1660"
+ },
+ "TITAN": {
+  "trading": "TITAN-EQ",
+  "token": "3506"
+ },
+ "": {
+  "trading": "MONIFTY100-EQ",
+  "token": "759371"
+ },
+ "TATAPOWER": {
+  "trading": "TATAPOWER-EQ",
+  "token": "3426"
+ },
+ "RPOWER": {
+  "trading": "RPOWER-EQ",
+  "token": "15259"
+ },
+ "NIFTY50": {
+  "trading": "MONIFTY500-EQ",
+  "token": "19237"
+ },
+ "IDEA": {
+  "trading": "IDEA-EQ",
+  "token": "14366"
+ },
+ "BHARTIARTL": {
+  "trading": "BHARTIARTL-EQ",
+  "token": "10604"
+ },
+ "mcx_fo:GOLD": {
+  "trading": "GOLDM05JAN27FUT",
+  "token": "578779"
+ }
+}

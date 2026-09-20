@@ -1,0 +1,40 @@
+{
+  "_comment": "YOUR swing strategy for the chart-AI (Claude Code / Gemini CLI). Load this file into the AI chat. AI suggests, Kotak bot executes after your phone approval.",
+  "profile": "NSE equity SWING, hold max 10 trading days (~2 weeks), LONG only",
+  "market": "NSE India (TradingView prefix NSE:, e.g. NSE:RELIANCE). Market hours 9:15-15:30 IST.",
+  "watchlist": ["NSE:RELIANCE", "NSE:INFY", "NSE:TCS", "NSE:HDFCBANK", "NSE:TATAMOTORS", "NSE:SBIN", "NSE:ICICIBANK", "NSE:LT"],
+  "timeframe": "1D (daily). Weekly 1W only for trend context.",
+  "entry_rules": {
+    "score_min": 70,
+    "checklist": [
+      "Close ABOVE 20-day highest high (breakout) = 35 pts",
+      "Close ABOVE 50 EMA = 20 pts",
+      "20 EMA ABOVE 50 EMA (uptrend) = 15 pts",
+      "Volume >= 1.3x of 20-day average = 15 pts",
+      "Close ABOVE 20 EMA = 10 pts",
+      "RSI(14) between 55 and 80 = 5 pts"
+    ]
+  },
+  "exit_rules": {
+    "stop_loss_pct": 2.0,
+    "target1_pct": 5.0,
+    "target1_action": "sell 50%, move stop to entry (breakeven)",
+    "target2_pct": 8.0,
+    "target2_action": "sell remaining 50%",
+    "time_stop_days": 10
+  },
+  "risk_rules": {
+    "risk_per_trade_rs": 1000,
+    "max_position_value_rs": 30000,
+    "max_positions": 3,
+    "max_new_per_day": 2,
+    "product": "CNC (delivery)"
+  },
+  "verdicts": {
+    "score_70_plus": "✅ CANDIDATE - report entry/stop/targets",
+    "score_50_69": "👀 WATCH - say what is missing",
+    "score_below_50": "❌ AVOID - one-line reason"
+  },
+  "execution": "SUGGEST ONLY. Never place real orders yourself. User approves on phone, Kotak bot executes.",
+  "honesty": "Never promise profit or accuracy numbers. Report what the chart shows, including risks."
+}

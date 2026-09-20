@@ -1,0 +1,998 @@
+[
+{
+"symbol": "ADANIENT",
+"name": "ADANIENT",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ADANIPORTS",
+"name": "ADANIPORTS",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "APOLLOHOSP",
+"name": "APOLLOHOSP",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ASIANPAINT",
+"name": "ASIANPAINT",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "AXISBANK",
+"name": "AXISBANK",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "BAJAJ-AUTO",
+"name": "BAJAJ-AUTO",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "BAJFINANCE",
+"name": "BAJFINANCE",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "BAJAJFINSV",
+"name": "BAJAJFINSV",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "BEL",
+"name": "BEL",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "BHARTIARTL",
+"name": "BHARTIARTL",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "CIPLA",
+"name": "CIPLA",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "COALINDIA",
+"name": "COALINDIA",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "DRREDDY",
+"name": "DRREDDY",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "EICHERMOT",
+"name": "EICHERMOT",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ETERNAL",
+"name": "ETERNAL",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "GRASIM",
+"name": "GRASIM",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "HCLTECH",
+"name": "HCLTECH",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "HDFCBANK",
+"name": "HDFCBANK",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "HDFCLIFE",
+"name": "HDFCLIFE",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "HINDALCO",
+"name": "HINDALCO",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "HINDUNILVR",
+"name": "HINDUNILVR",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ICICIBANK",
+"name": "ICICIBANK",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ITC",
+"name": "ITC",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "INFY",
+"name": "INFY",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "INDIGO",
+"name": "INDIGO",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "JSWSTEEL",
+"name": "JSWSTEEL",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "JIOFIN",
+"name": "JIOFIN",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "KOTAKBANK",
+"name": "KOTAKBANK",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "LT",
+"name": "LT",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "M&M",
+"name": "M&M",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "MARUTI",
+"name": "MARUTI",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "MAXHEALTH",
+"name": "MAXHEALTH",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "NTPC",
+"name": "NTPC",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "NESTLEIND",
+"name": "NESTLEIND",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ONGC",
+"name": "ONGC",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "POWERGRID",
+"name": "POWERGRID",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "RELIANCE",
+"name": "RELIANCE",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "SBILIFE",
+"name": "SBILIFE",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "SHRIRAMFIN",
+"name": "SHRIRAMFIN",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "SBIN",
+"name": "SBIN",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "SUNPHARMA",
+"name": "SUNPHARMA",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TCS",
+"name": "TCS",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TATACONSUM",
+"name": "TATACONSUM",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TMPV",
+"name": "TMPV",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TATASTEEL",
+"name": "TATASTEEL",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TECHM",
+"name": "TECHM",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TITAN",
+"name": "TITAN",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "TRENT",
+"name": "TRENT",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ULTRACEMCO",
+"name": "ULTRACEMCO",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "WIPRO",
+"name": "WIPRO",
+"series": "EQ",
+"index": "nifty50"
+},
+{
+"symbol": "ABB",
+"name": "ABB",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ADANIGREEN",
+"name": "ADANIGREEN",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ADANIPOWER",
+"name": "ADANIPOWER",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ALKEM",
+"name": "ALKEM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "AMBUJACEM",
+"name": "AMBUJACEM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ASHOKLEY",
+"name": "ASHOKLEY",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ASTRAL",
+"name": "ASTRAL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "AUBANK",
+"name": "AUBANK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "AUROPHARMA",
+"name": "AUROPHARMA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BANDHANBNK",
+"name": "BANDHANBNK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BANKBARODA",
+"name": "BANKBARODA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BERGEPAINT",
+"name": "BERGEPAINT",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BHARATFORG",
+"name": "BHARATFORG",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BHEL",
+"name": "BHEL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BIOCON",
+"name": "BIOCON",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BOSCHLTD",
+"name": "BOSCHLTD",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BPCL",
+"name": "BPCL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BRITANNIA",
+"name": "BRITANNIA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "BSE",
+"name": "BSE",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "CANBK",
+"name": "CANBK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "CDSL",
+"name": "CDSL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "CHOLAFIN",
+"name": "CHOLAFIN",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "COFORGE",
+"name": "COFORGE",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "COLPAL",
+"name": "COLPAL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "CONCOR",
+"name": "CONCOR",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "CUMMINSIND",
+"name": "CUMMINSIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "DABUR",
+"name": "DABUR",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "DALBHARAT",
+"name": "DALBHARAT",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "DELHIVERY",
+"name": "DELHIVERY",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "DIVISLAB",
+"name": "DIVISLAB",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "DLF",
+"name": "DLF",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "DMART",
+"name": "DMART",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "EXIDEIND",
+"name": "EXIDEIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "FEDERALBNK",
+"name": "FEDERALBNK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "GAIL",
+"name": "GAIL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "GLENMARK",
+"name": "GLENMARK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "GODREJCP",
+"name": "GODREJCP",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "GODREJPROP",
+"name": "GODREJPROP",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "HAL",
+"name": "HAL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "HAVELLS",
+"name": "HAVELLS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "HEROMOTOCO",
+"name": "HEROMOTOCO",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "HINDZINC",
+"name": "HINDZINC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "HUDCO",
+"name": "HUDCO",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ICICIGI",
+"name": "ICICIGI",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ICICIPRULI",
+"name": "ICICIPRULI",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IDFCFIRSTB",
+"name": "IDFCFIRSTB",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IGL",
+"name": "IGL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "INDHOTEL",
+"name": "INDHOTEL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "INDUSTOWER",
+"name": "INDUSTOWER",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "INDUSINDBK",
+"name": "INDUSINDBK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IOC",
+"name": "IOC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IRCTC",
+"name": "IRCTC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IREDA",
+"name": "IREDA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IRFC",
+"name": "IRFC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "JINDALSTEL",
+"name": "JINDALSTEL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "JSWENERGY",
+"name": "JSWENERGY",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "KEI",
+"name": "KEI",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "LAURUSLABS",
+"name": "LAURUSLABS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "LICI",
+"name": "LICI",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "LODHA",
+"name": "LODHA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "LTIM",
+"name": "LTIM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "LUPIN",
+"name": "LUPIN",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "MANKIND",
+"name": "MANKIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "MCX",
+"name": "MCX",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "MOTHERSON",
+"name": "MOTHERSON",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "MPHASIS",
+"name": "MPHASIS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "MRF",
+"name": "MRF",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "MUTHOOTFIN",
+"name": "MUTHOOTFIN",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "NAUKRI",
+"name": "NAUKRI",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "NHPC",
+"name": "NHPC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "NMDC",
+"name": "NMDC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "OBEROIRLTY",
+"name": "OBEROIRLTY",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "OFSS",
+"name": "OFSS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PAGEIND",
+"name": "PAGEIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PAYTM",
+"name": "PAYTM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PEL",
+"name": "PEL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PERSISTENT",
+"name": "PERSISTENT",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PETRONET",
+"name": "PETRONET",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PFC",
+"name": "PFC",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PIDILITIND",
+"name": "PIDILITIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PIIND",
+"name": "PIIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PNB",
+"name": "PNB",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "POLYCAB",
+"name": "POLYCAB",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "POLICYBZR",
+"name": "POLICYBZR",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PRESTIGE",
+"name": "PRESTIGE",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "PVRINOX",
+"name": "PVRINOX",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "RECLTD",
+"name": "RECLTD",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SAIL",
+"name": "SAIL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SHREECEM",
+"name": "SHREECEM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SIEMENS",
+"name": "SIEMENS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SOLARINDS",
+"name": "SOLARINDS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SRF",
+"name": "SRF",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SUPREMEIND",
+"name": "SUPREMEIND",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SUZLON",
+"name": "SUZLON",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TATACHEM",
+"name": "TATACHEM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TATAPOWER",
+"name": "TATAPOWER",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TATATECH",
+"name": "TATATECH",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TIINDIA",
+"name": "TIINDIA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TORNTPHARM",
+"name": "TORNTPHARM",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TORNTPOWER",
+"name": "TORNTPOWER",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TVSMOTOR",
+"name": "TVSMOTOR",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "UNIONBANK",
+"name": "UNIONBANK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "UNITDSPR",
+"name": "UNITDSPR",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "UPL",
+"name": "UPL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "VBL",
+"name": "VBL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "VEDL",
+"name": "VEDL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "VOLTAS",
+"name": "VOLTAS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "YESBANK",
+"name": "YESBANK",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "ZYDUSLIFE",
+"name": "ZYDUSLIFE",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "CAMS",
+"name": "CAMS",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "NYKAA",
+"name": "NYKAA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "SWIGGY",
+"name": "SWIGGY",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "TMCV",
+"name": "TMCV",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "IDEA",
+"name": "IDEA",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "HFCL",
+"name": "HFCL",
+"series": "EQ",
+"index": "liquid"
+},
+{
+"symbol": "NATIONALUM",
+"name": "NATIONALUM",
+"series": "EQ",
+"index": "liquid"
+}
+]
