@@ -28,6 +28,19 @@ Rules: "buy X if above Y"/"alert me" -> task_create, never an immediate trade.
 qty missing? omit qty. done=true when complete.
 """
 
+GENERAL_WRITE = """You are a sharp Telegram assistant in India (Gemini-quality, not a lecture).
+
+LENGTH is given below. Obey it strictly.
+- SHORT: 4-8 lines total. First sentence = the answer. Then 2-4 bullets. Stop. No essay.
+- DETAIL: complete but still tight. First sentence = the answer. Then a short table/bullets of the facts. One ⚠️ if needed. Still under ~20 lines. No textbook.
+
+PLAIN TEXT. No markdown ** ##. No URLs. No Want (a)(b) unless they asked about a stock trade.
+Use ONLY FACTS. Do not invent numbers. Ignore stale 2025 / wrong-topic items.
+Today-question = today. Monthly-question = rest of this month.
+No swing, Sid 44, or NSE scan unless they asked about a stock.
+Match English / Hindi / Hinglish.
+"""
+
 WRITEUP = """You are a personal NSE/BSE swing-trading assistant on Telegram, talking to one user in India.
 Write the way a world-class assistant writes: warm, direct, specific, honest.
 
@@ -216,13 +229,55 @@ class Agent:
         facts = web_tools.nse_research(sym)
         return self._write_trade(text, context, facts)
 
+    def _wants_detail(self, text: str) -> bool:
+        t = (text or "").lower()
+        return bool(re.search(
+            r"\b(detail|details|detailed|in detail|full detail|"
+            r"explain fully|more info|elaborate|long answer)\b", t))
+
     def _general(self, text: str) -> str:
-        """Google / Redmi / any topic. Facts only. Never swing WRITEUP."""
+        """Short by default. Word 'detail' = longer. Never a lecture."""
         facts = web_tools.general_facts(text)
-        out = self._general_report(facts)
+        detail = self._wants_detail(text)
+        length = "DETAIL" if detail else "SHORT"
+        if facts.get("intent") == "weather":
+            out = self._weather_report(facts, detail=detail)
+            self.mem.add("user", text)
+            self.mem.add("assistant", out)
+            return out
+        raw = self._general_report(facts)
+        facts_txt = self._facts_for_write(facts) or raw
+        try:
+            polished = ai_router.ask_text(
+                f"LENGTH={length}\nUSER asked: {text}\n\n"
+                f"FACTS (do not invent):\n{facts_txt}\n\nFALLBACK:\n{raw[:800]}",
+                GENERAL_WRITE)
+        except Exception:
+            polished = ""
+        out = tg_plain(polished) if polished and len(polished) > 40 else raw
+        if length == "SHORT" and out.count("\n") > 10:
+            out = "\n".join(out.splitlines()[:8])
+        out = re.sub(r"https?://\S+", "", out)
         self.mem.add("user", text)
         self.mem.add("assistant", out)
         return out
+
+    def _facts_for_write(self, facts: dict) -> str:
+        bits = [f"intent={facts.get('intent')} span={facts.get('span') or ''}"]
+        now = facts.get("now") or {}
+        if now.get("temp") is not None:
+            bits.append(f"NOW {now.get('place')}: {now.get('temp')}C rh {now.get('rh')}")
+        for d in facts.get("daily") or []:
+            bits.append(
+                f"DAY {d.get('date')} {d.get('tmin')}-{d.get('tmax')} "
+                f"rain% {d.get('pop')}")
+        if facts.get("wiki"):
+            bits.append("WIKI: " + facts["wiki"][:400])
+        for n in (facts.get("news") or [])[:5]:
+            bits.append("• " + (n.get("title") or ""))
+            if n.get("body"):
+                bits.append("  " + n["body"][:220])
+        return "\n".join(bits) if len(bits) > 1 else "(no facts fetched)"
 
     def _market_news(self, text: str) -> str:
         facts = web_tools.market_facts()
@@ -281,7 +336,7 @@ class Agent:
                 lines.append(f"  {body[:280]}")
         return lines
 
-    def _weather_report(self, facts: dict) -> str:
+    def _weather_report(self, facts: dict, detail: bool = False) -> str:
         now = facts.get("now") or {}
         daily = facts.get("daily") or []
         place = now.get("place") or facts.get("place") or "Ahmedabad"
@@ -289,7 +344,13 @@ class Agent:
             return (f"Could not fetch the live forecast for {place} just now. "
                     "Try again in a minute.")
         wmo = getattr(web_tools, "_WMO", {})
-        lines = [f"Weather — {place} (next {len(daily) or facts.get('days') or 5} days)"]
+        span = facts.get("span") or "week"
+        if span == "today":
+            lines = [f"{place} — today."]
+        elif span == "month":
+            lines = [f"{place} — rest of this month (live forecast)."]
+        else:
+            lines = [f"{place} — next {len(daily) or facts.get('days') or 5} days."]
         if now.get("temp") is not None:
             sky = wmo.get(int(now.get("code") or 0), "")
             lines.append(
@@ -299,11 +360,12 @@ class Agent:
                 + (f", wind {now['wind']:.0f} km/h" if now.get("wind") is not None else "")
             )
         lines.append("")
-        for d in daily:
+        show = daily[:1] if span == "today" else daily
+        for d in show:
             try:
                 from datetime import date as _date
                 dt = _date.fromisoformat(str(d.get("date"))[:10])
-                day = dt.strftime("%a %d %b")
+                day = "Today" if dt == _date.today() else dt.strftime("%a %d %b")
             except Exception:
                 day = str(d.get("date") or "")[:10]
             sky = wmo.get(int(d.get("code") or 0), "")
@@ -319,7 +381,11 @@ class Agent:
             elif rain is not None:
                 bit += f"  rain {rain:.1f} mm"
             lines.append(bit)
-        lines.append("Forecast (Open-Meteo), not a news dump.")
+        if span == "today" and daily and (daily[0].get("pop") or 0) >= 40:
+            lines.append("Carry a light rain jacket later today.")
+        if span == "month":
+            lines.append("True 30-day day-by-day is not published. This is the rest of this month from the live model.")
+        lines.append("Live forecast — not old news pages.")
         return "\n".join(lines)
 
     def _general_report(self, facts: dict) -> str:

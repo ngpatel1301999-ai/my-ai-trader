@@ -419,8 +419,19 @@ _ENTITIES = (
 )
 
 
+def normalize_query(text: str) -> str:
+    """Fix common typos so 'wether' is weather, not news."""
+    t = text or ""
+    t = re.sub(r"\b(wether|wheather|weater|wather)\b", "weather", t, flags=re.I)
+    t = re.sub(r"\bforcast\b", "forecast", t, flags=re.I)
+    t = re.sub(r"\btemprature\b", "temperature", t, flags=re.I)
+    t = re.sub(r"\b(ahemdabad|ahmdabad)\b", "Ahmedabad", t, flags=re.I)
+    t = re.sub(r"\bgujrat\b", "Gujarat", t, flags=re.I)
+    return t
+
+
 def query_intent(text: str) -> str:
-    t = (text or "").lower()
+    t = normalize_query(text).lower()
     if re.search(r"\b(weather|forecast|rain|rainfall|temperature|imd|"
                  r"thunder|humid|heatwave|red alert)\b", t):
         return "weather"
@@ -573,12 +584,18 @@ def _weather_place(text: str) -> str:
 def weather_facts(query: str) -> dict:
     """Live forecast (Open-Meteo). Not news headlines. No API key."""
     import json as _j
-    place = _weather_place(query)
-    days = 5
-    m = re.search(r"next\s+(\d+)\s*day", (query or "").lower())
-    if m:
-        days = max(1, min(7, int(m.group(1))))
-    out = {"query": query, "intent": "weather", "place": place,
+    from datetime import date
+    qn = normalize_query(query)
+    low = qn.lower()
+    place = _weather_place(qn)
+    span, days = "week", 5
+    if re.search(r"\b(month|monthly|this month)\b", low):
+        span, days = "month", 16
+    elif re.search(r"next\s+(\d+)\s*day", low):
+        span, days = "week", max(1, min(16, int(re.search(r"next\s+(\d+)\s*day", low).group(1))))
+    elif re.search(r"\b(today|tonight|now)\b", low) and not re.search(r"\b(next|week|month|days)\b", low):
+        span, days = "today", 2
+    out = {"query": query, "intent": "weather", "place": place, "span": span,
            "days": days, "news": [], "wiki": "", "daily": [], "now": {}}
     try:
         gurl = ("https://geocoding-api.open-meteo.com/v1/search?name="
@@ -611,15 +628,37 @@ def weather_facts(query: str) -> dict:
             "place": f"{label}" + (f", {admin}" if admin else ""),
         }
         daily = d.get("daily") or {}
-        dates = daily.get("time") or []
+        dates = list(daily.get("time") or [])
+        if span == "month":
+            today = date.today()
+            keep = []
+            for i, day in enumerate(dates):
+                try:
+                    dd = date.fromisoformat(str(day)[:10])
+                    if dd.month == today.month and dd.year == today.year:
+                        keep.append(i)
+                except Exception:
+                    keep.append(i)
+            if keep:
+                def col(name):
+                    arr = daily.get(name) or []
+                    return [arr[i] if i < len(arr) else None for i in keep]
+                dates = [dates[i] for i in keep]
+                daily = {
+                    "temperature_2m_max": col("temperature_2m_max"),
+                    "temperature_2m_min": col("temperature_2m_min"),
+                    "precipitation_sum": col("precipitation_sum"),
+                    "precipitation_probability_max": col("precipitation_probability_max"),
+                    "weather_code": col("weather_code"),
+                }
         for i, day in enumerate(dates):
             out["daily"].append({
                 "date": day,
-                "tmax": (daily.get("temperature_2m_max") or [None])[i],
-                "tmin": (daily.get("temperature_2m_min") or [None])[i],
-                "rain": (daily.get("precipitation_sum") or [None])[i],
-                "pop": (daily.get("precipitation_probability_max") or [None])[i],
-                "code": (daily.get("weather_code") or [None])[i],
+                "tmax": (daily.get("temperature_2m_max") or [None])[i] if i < len(daily.get("temperature_2m_max") or []) else None,
+                "tmin": (daily.get("temperature_2m_min") or [None])[i] if i < len(daily.get("temperature_2m_min") or []) else None,
+                "rain": (daily.get("precipitation_sum") or [None])[i] if i < len(daily.get("precipitation_sum") or []) else None,
+                "pop": (daily.get("precipitation_probability_max") or [None])[i] if i < len(daily.get("precipitation_probability_max") or []) else None,
+                "code": (daily.get("weather_code") or [None])[i] if i < len(daily.get("weather_code") or []) else None,
             })
     except Exception as e:
         log.warning("weather: %s", e)

@@ -147,6 +147,7 @@ class TelegramRemote(threading.Thread):
         self.token = token
         self.chat_id = str(chat_id)
         self.app = app
+        self.ready = threading.Event()
 
     def _allowed(self, update) -> bool:
         try:
@@ -166,7 +167,8 @@ class TelegramRemote(threading.Thread):
         if any(w in low for w in ("news", "research", "headline", "analyse",
                                    "analyze", "ask all", "deepthink", "find ",
                                    "tell me", "what is", "what's", "who is",
-                                   "explain", "launch", "event")):
+                                   "explain", "launch", "event", "weather",
+                                   "wether", "forecast", "monthly")):
             return True
         if "scan" in low:
             return True
@@ -178,6 +180,7 @@ class TelegramRemote(threading.Thread):
     def run(self):
         if not self.token or "PASTE" in self.token or not self.chat_id:
             log.warning("Telegram not configured — mobile remote OFF")
+            self.ready.set()
             return
         pub = publish_bot_commands(self.token, self.chat_id)
         log.info("command menu: %s", pub)
@@ -191,6 +194,7 @@ class TelegramRemote(threading.Thread):
                 MenuButtonCommands = None
         except Exception as e:
             log.error("telegram lib missing? pip install python-telegram-bot : %s", e)
+            self.ready.set()
             return
 
         app = self.app
@@ -320,8 +324,9 @@ class TelegramRemote(threading.Thread):
             try:
                 cmds = [BotCommand(c, d) for c, d in BOT_CMDS]
                 await application.bot.set_my_commands(cmds)
-                await application.bot.set_chat_menu_button(
-                    menu_button=MenuButtonCommands())
+                if MenuButtonCommands is not None:
+                    await application.bot.set_chat_menu_button(
+                        menu_button=MenuButtonCommands())
                 try:
                     await application.bot.set_chat_menu_button(
                         chat_id=int(self.chat_id),
@@ -346,6 +351,7 @@ class TelegramRemote(threading.Thread):
             await app_tg.start()
             await app_tg.updater.start_polling()
             log.info("Telegram remote ON")
+            self.ready.set()
             await asyncio.Event().wait()
 
         try:
