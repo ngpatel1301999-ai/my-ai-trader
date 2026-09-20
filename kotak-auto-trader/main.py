@@ -708,6 +708,38 @@ class App:
             return self.comm.sell(name)
         return self.comm.quote(name)
 
+    def _task_ids(self, text: str) -> list:
+        import re as _re
+        ids = [int(x) for x in _re.findall(r"#\s*(\d+)", text or "")]
+        if ids:
+            return ids
+        return [int(x) for x in _re.findall(r"\b(\d{1,3})\b", text or "")
+                if 1 <= int(x) <= 200]
+
+    def cmd_cancel_tasks(self, text: str, comm: bool = False) -> str:
+        """cancle/cancel 2,3,4  |  cancel all  — commodity or equity."""
+        import re as _re
+        eng = self.comm_tasks if comm else self.tasks
+        listing = self.cmd_comm_tasks() if comm else self.cmd_tasks()
+        low = (text or "").lower()
+        ids = self._task_ids(text)
+        if _re.search(r"\ball\b", low) and not _re.search(r"#", text or ""):
+            n, done = 0, []
+            for t in list(eng.open_tasks()):
+                if eng.cancel(t["id"]):
+                    n += 1
+                    done.append("#%s" % t["id"])
+            return ("Cancelled %d %s task(s): %s.\n%s" % (
+                n, "commodity" if comm else "equity",
+                ", ".join(done) or "none", listing))
+        if not ids:
+            return "Which task id? Example: cancel 2,3,4 commodity\n" + listing
+        bits = []
+        for i in ids:
+            ok = eng.cancel(i)
+            bits.append("#%d cancelled" % i if ok else "#%d not open" % i)
+        return "\n".join(bits) + "\n" + listing
+
     def cmd_commodity_msg(self, text: str) -> str:
         """Any chat with commodity / MCX / GOLD / currency — never NSE Sid."""
         import re as _re
@@ -715,13 +747,11 @@ class App:
         name = pick_commodity(text)
         if _re.search(r"\b(if|when)\b", low):
             return self.cmd_comm_task(text)
+        _cx = _re.search(r"\b(cancel|cancle|delete|remove)\b", low)
+        if _cx and ("task" in low or "commodit" in low or _re.search(r"\d+", low)
+                    or _re.search(r"\ball\b", low)):
+            return self.cmd_cancel_tasks(text, comm=True)
         if "task" in low:
-            if "cancel all" in low:
-                n = 0
-                for t in list(self.comm_tasks.open_tasks()):
-                    if self.comm_tasks.cancel(t["id"]):
-                        n += 1
-                return f"Cancelled {n} commodity task(s).\n{self.cmd_comm_tasks()}"
             return self.cmd_comm_tasks()
         if _re.search(r"\b(news|research|headline)\b", low):
             return self.comm.research(name)
@@ -780,6 +810,8 @@ class App:
             return self.comm.portfolio() if is_comm else self.cmd_positions()
         if cmd in ("task", "tasks"):
             return self.cmd_comm_tasks() if is_comm else self.cmd_tasks()
+        if cmd in ("cancel", "cancle"):
+            return self.cmd_cancel_tasks(raw, comm=is_comm)
         if cmd == "scan":
             if is_comm and "currency" in low:
                 return self.comm.scan(names=FX_NAMES)
@@ -849,13 +881,11 @@ class App:
             return self.cmd_tasks()
         if s in ("pnl", "profit", "p&l", "p/l"):
             return self.cmd_portfolio()
-        if "task" in low and "cancel" in low and _re.search(r"\d+", low):
+        if _re.search(r"\b(cancel|cancle|delete|remove)\b", low) and (
+                "task" in low or _re.search(r"#\s*\d+", low) or _re.search(r"\ball\b", low)):
             if _re.search(r"\b(if|when|done|complete|then)\b", low):
                 return self.cmd_task_link(raw)
-            m = _re.search(r"cancel task #?(\d+)", low)
-            if m:
-                ok = self.tasks.cancel(int(m.group(1)))
-                return ("Cancelled." if ok else "Task not found.") + "\n" + self.cmd_tasks()
+            return self.cmd_cancel_tasks(raw, comm=False)
         if (("task" in low or "tasks" in low)
                 and _re.search(r"automatic cancel|auto cancel|any one|anyone", low)):
             return self.cmd_tasks_exclusive()

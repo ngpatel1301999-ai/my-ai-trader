@@ -8,9 +8,26 @@ Saved in tasks.json (survives restart).
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 log = logging.getLogger("tasks")
+
+
+def _weekdays_elapsed(start: str, now: datetime) -> int:
+    """Inclusive working days (Mon-Fri) from start date until now.date()."""
+    try:
+        d0 = datetime.strptime(start[:10], "%Y-%m-%d").date()
+    except Exception:
+        return 0
+    d1 = now.date() if hasattr(now, "date") else now
+    if d1 <= d0:
+        return 0
+    n, cur = 0, d0
+    while cur < d1:
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            n += 1
+    return n
 TASKS_FILE = "tasks.json"
 
 
@@ -39,7 +56,7 @@ class TaskEngine:
             log.warning("tasks save failed: %s", e)
 
     def add(self, kind, action, symbol="", level=0.0, qty=0, note="", expires="",
-            at_time="", exclusive=False, cancel_on_done=None) -> int:
+            at_time="", exclusive=False, cancel_on_done=None, from_date="") -> int:
         try:
             q = float(qty or 0)
         except (TypeError, ValueError):
@@ -51,6 +68,7 @@ class TaskEngine:
              "note": note, "expires": expires, "at_time": at_time,
              "exclusive": bool(exclusive),
              "cancel_on_done": list(cancel_on_done or []),
+             "from_date": (from_date or "")[:10],
              "status": "open", "created": datetime.now().strftime("%Y-%m-%d %H:%M"),
              "result": ""}
         self._next_id += 1
@@ -90,9 +108,9 @@ class TaskEngine:
             return (f"#{t['id']} IF open swing LOSS >= Rs {t['level']:.0f} "
                     f"(P&L <= -{t['level']:.0f}) THEN {t['action']}")
         if t["kind"] == "pnl_pct_above":
-            return (f"#{t['id']} IF book profit >= {t['level']:g}% THEN {t['action']}")
+            return (f"#{t['id']} IF book profit at or above {t['level']:g}% THEN {t['action']}")
         if t["kind"] == "pnl_pct_below":
-            return (f"#{t['id']} IF book loss >= {t['level']:g}% THEN {t['action']}")
+            return (f"#{t['id']} IF book loss at or above {t['level']:g}% THEN {t['action']}")
         if t["kind"] in ("price_above", "price_below"):
             word = "above" if t["kind"] == "price_above" else "below"
             return (f"#{t['id']} IF {t['symbol']} {word} {t['level']:.2f} "
@@ -125,6 +143,10 @@ class TaskEngine:
                 if t["kind"] == "pnl_pct_above" and pct >= t["level"]:
                     due.append(t)
                 elif t["kind"] == "pnl_pct_below" and pct <= -abs(t["level"]):
+                    due.append(t)
+            elif t["kind"] == "working_days":
+                start = (t.get("from_date") or t.get("created") or "")[:10]
+                if start and _weekdays_elapsed(start, now) >= int(t["level"] or 0):
                     due.append(t)
             elif t["kind"] in ("price_above", "price_below"):
                 px = prices.get(t["symbol"]) or prices.get(t["symbol"] + "-EQ")

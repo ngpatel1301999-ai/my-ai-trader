@@ -416,6 +416,7 @@ _ENTITIES = (
     ("world bank", '"World Bank" (institution OR IMF OR development) -"top 10 banks" -"top performing banks"'),
     ("nse ipo", "NSE IPO listing BSE"),
     ("grey market", "NSE IPO GMP"),
+    ("zydus", "Zydus Healthcare Zydus Cadila Zydus Lifesciences India"),
 )
 
 

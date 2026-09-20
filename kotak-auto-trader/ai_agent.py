@@ -38,6 +38,7 @@ PLAIN TEXT. No markdown ** ##. No URLs. No Want (a)(b) unless they asked about a
 Use ONLY FACTS. Do not invent numbers. Ignore stale 2025 / wrong-topic items.
 Today-question = today. Monthly-question = rest of this month.
 No swing, Sid 44, or NSE scan unless they asked about a stock.
+If they ask which insurance/mediclaim is best: 2-3 well-known plan types in their budget, plus ⚠️ not personal advice — compare on the insurer site / IRDAI. Never pick one policy as the only winner.
 Match English / Hindi / Hinglish.
 """
 
@@ -68,6 +69,25 @@ FAST_EXACT = {
 }
 
 
+IDENTITY = (
+    "I'm your personal Telegram bot. You built me for paper trading + Q&A. "
+    "I have no age and no Google boss. Google Gemini, news and weather are tools I call. "
+    "They did not create me — you did."
+)
+
+GREET = re.compile(
+    r"^\s*(hi|hii|hiii|hey|hello|yo|namaste|namaskar|hola|sup|good morning|"
+    r"good evening|good afternoon|ok|okay|thanks|thank you|thx)\s*[!.]*\s*$",
+    re.I)
+
+WHOAMI = re.compile(
+    r"who are you|what(?:'s| is) your name|your age|how old are you|"
+    r"who (?:is|are) your boss|who (?:made|created|built) you|"
+    r"who is your (?:creator|owner|father)|are you google|"
+    r"you(?:re|'re|r) name|you(?:re|'re|r) age",
+    re.I)
+
+
 def tg_plain(s: str) -> str:
     s = (s or "").replace("**", "").replace("__", "")
     s = re.sub(r"^#+\s*", "", s, flags=re.M)
@@ -92,6 +112,21 @@ class Agent:
         if m:
             self.prof.add_note(m.group(2).strip())
             return f"✍️ Noted: {m.group(2).strip()[:120]}"
+
+        if GREET.match(text):
+            out = "Hi. I'm your paper-trading Telegram bot — you built me. Ask anything."
+            self.mem.add("user", text)
+            self.mem.add("assistant", out)
+            return out
+        if WHOAMI.search(low) or re.search(
+                r"\b(i created you|i made you|my contribution|not google)\b", low):
+            out = IDENTITY
+            if re.search(r"\bgoogle\b|other tools|contribution", low):
+                out += (" Tools I use when needed: Gemini, news feeds, weather. "
+                        "That is help, not ownership.")
+            self.mem.add("user", text)
+            self.mem.add("assistant", out)
+            return out
 
         if self._is_modify(low):
             return self._modify_pos(text, executor)
@@ -247,9 +282,11 @@ class Agent:
             return out
         raw = self._general_report(facts)
         facts_txt = self._facts_for_write(facts) or raw
+        hist = self.mem.context_text() or "none"
         try:
             polished = ai_router.ask_text(
-                f"LENGTH={length}\nUSER asked: {text}\n\n"
+                f"LENGTH={length}\nUSER asked: {text}\n"
+                f"RECENT CHAT (follow-ups use this):\n{hist[:1200]}\n\n"
                 f"FACTS (do not invent):\n{facts_txt}\n\nFALLBACK:\n{raw[:800]}",
                 GENERAL_WRITE)
         except Exception:
@@ -359,8 +396,19 @@ class Agent:
                 + (f", humidity {now['rh']:.0f}%" if now.get("rh") is not None else "")
                 + (f", wind {now['wind']:.0f} km/h" if now.get("wind") is not None else "")
             )
+        if span == "month" and not detail:
+            pops = [d.get("pop") or 0 for d in daily]
+            tmaxs = [d.get("tmax") for d in daily if d.get("tmax") is not None]
+            tmins = [d.get("tmin") for d in daily if d.get("tmin") is not None]
+            lines.append("")
+            if pops:
+                lines.append(f"Rain likelier early (~{max(pops):.0f}% peak), then mostly dry.")
+            if tmins and tmaxs:
+                lines.append(f"Range about {min(tmins):.0f}–{max(tmaxs):.0f}°C through month-end.")
+            lines.append("Say monthly detail for each day.")
+            return "\n".join(lines)
         lines.append("")
-        show = daily[:1] if span == "today" else daily
+        show = daily[:1] if (span == "today" and not detail) else daily
         for d in show:
             try:
                 from datetime import date as _date
