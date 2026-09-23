@@ -112,6 +112,7 @@ class App:
         self._pid = 1
         self.universe = []      # [{symbol, trading, token}]
         self.tok2sym = {}
+        self._marks_lock = threading.Lock()   # one LTP-resolution pass at a time
         self.today = None
         self.intra = IntradayEngine(self)
         self.swing = SwingEngine(self)
@@ -240,6 +241,14 @@ class App:
         pos = self.swing.book.positions
         if not pos:
             return []
+        # Two threads (startup alert + guardian/dashboard) used to run this at the
+        # same instant, both see an empty cache and BOTH fetch Yahoo - that is the
+        # duplicate "resolved via yahoo" pair in the logs. Serialise the pass; the
+        # second caller then finds a warm cache and does nothing.
+        with self._marks_lock:
+            return self._swing_marks_locked(pos)
+
+    def _swing_marks_locked(self, pos: dict) -> list:
         ltps = dict(getattr(self, "_last_ltps", {}) or {})
         # normalise: make the "-EQ"-free spelling available for every warm key
         for k, v in list(ltps.items()):
@@ -1968,12 +1977,32 @@ def _positions_snapshot() -> dict:
             qty = float(p.get("qty") or 0)
             entry = float(p.get("entry") or 0)
             ltp = float(ltps.get(name) or 0)
+            src = ""
+            if not ltp and comm is not None:
+                # comm.last_prices is only filled when something calls
+                # snapshot() (EOD / portfolio text). The dashboard used to show
+                # GOLD with LTP 0 and P&L 0 because of exactly that. Fetch a
+                # live quote (Kotak MCX first, Yahoo fallback) instead.
+                try:
+                    snap = comm.snapshot(name) or {}
+                    ltp = float(snap.get("px") or 0)
+                    src = str(snap.get("src") or "")
+                    if ltp:
+                        ltps[name] = ltp
+                        try:
+                            comm.last_prices[name] = ltp
+                        except Exception:
+                            pass
+                except Exception as e:
+                    log.warning("commodity snapshot %s failed: %s", name, e)
+            ccy = str(p.get("ccy") or (snap.get("ccy") if src else "") or "")
             out["positions"].append({
                 "symbol": name, "trading_symbol": name, "type": "commodity",
                 "qty": qty, "buy_price": entry, "ltp": ltp,
                 "pnl": round((ltp - entry) * qty, 2) if ltp else 0.0,
                 "pnl_pct": round(100.0 * (ltp - entry) / entry, 2) if (ltp and entry) else 0.0,
                 "mode": p.get("mode", "paper"),
+                "ccy": ccy, "price_src": src,
             })
     except Exception as e:
         out["error"] = (out["error"] + f" | commodity: {e}").strip(" |")

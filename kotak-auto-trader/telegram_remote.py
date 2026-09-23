@@ -146,9 +146,14 @@ def send_msg_sync(token: str, chat_id: str, text: str):
 
         async def _go():
             async with Bot(token) as b:
-                for i, part in enumerate(_split(text)):
+                parts = _split(text)
+                for i, part in enumerate(parts):
                     head = f"(part {i+1})\n" if i else ""
                     part = _html.unescape(part)      # never ship "&amp;" to Telegram
+                    # Ground truth: the log now shows the EXACT bytes handed to
+                    # Telegram, so "what did the phone actually receive" is
+                    # never a guessing game again.
+                    log.info("TG SEND %d/%d %r", i + 1, len(parts), part[:70])
                     await b.send_message(chat_id=int(chat_id), text=head + part)
 
         asyncio.run(_go())

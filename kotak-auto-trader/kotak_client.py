@@ -51,6 +51,7 @@ FALLBACK_TTL = 30  # seconds: reuse delayed-feed prices within this window
 HIST_MIN_GAP = 0.4       # seconds between two historical-data calls
 RATE_LIMIT_PAUSE = 8.0   # seconds to wait after Kotak says 429
 RATE_LIMIT_MAX = 30.0    # never sleep longer than this in one go
+CONN_RETRY_PAUSE = 2.0   # calm pause before retrying a dropped connection
 
 
 def _walk(obj, keys_wanted):
@@ -117,6 +118,7 @@ class KotakClient:
         self.totp_secret = totp_secret
         self._login_lock = threading.Lock()
         self._last_attempt_at = 0.0
+        self._call_lock = threading.Lock()   # one Kotak HTTP request at a time
         self.segment = segment
         self.client = None
         self.logged_in = False
@@ -213,6 +215,40 @@ class KotakClient:
                 time.sleep(wait)      # OUTSIDE the lock: never block other threads
         return False
 
+    @staticmethod
+    def _is_conn_error(resp) -> bool:
+        """Kotak sometimes just drops the TCP connection ("Server disconnected"),
+        most often when several of our threads hit it at the same moment. That is
+        transient and deserves ONE calm retry - unlike a 429, which needs a long
+        pause instead."""
+        low = str(resp or "").lower().replace("\n", " ")
+        return any(k in low for k in ("server disconnected", "connection aborted",
+                                      "connection reset", "connection broken",
+                                      "broken pipe", "read timed out",
+                                      "connect timeout", "remotedisconnected"))
+
+    def _kotak_call(self, fn, *a, **kw):
+        """Run a Kotak HTTP call with (a) only ONE request in flight at a time and
+        (b) one calm retry if the server drops the connection. Our own concurrent
+        requests are themselves a disconnect cause, so serialising them fixes the
+        root, not just the symptom."""
+        last = None
+        for attempt in (1, 2):
+            with self._call_lock:
+                try:
+                    resp = fn(*a, **kw)
+                except Exception as e:      # SDK can raise on a dropped socket
+                    resp = e
+            last = resp
+            if self._is_conn_error(resp):
+                log.warning("Kotak dropped the connection (%s) - calm retry %d/2 "
+                            "in %.1fs", str(resp)[:90].replace("\n", " "), attempt,
+                            CONN_RETRY_PAUSE)
+                time.sleep(CONN_RETRY_PAUSE)
+                continue
+            return resp
+        return last
+
     # ---------------- market data ----------------
     def get_ltps(self, tokens: list, segment: str = None) -> dict:
         """One quotes call for all stocks; missing ones fall back to 1-min
@@ -224,7 +260,9 @@ class KotakClient:
             return out
         try:
             req = [{"instrument_token": str(t), "exchange_segment": segment} for t in tokens]
-            resp = self.client.quotes(instrument_tokens=req, quote_type="all")
+            self._throttle()
+            resp = self._kotak_call(self.client.quotes, instrument_tokens=req,
+                                    quote_type="all")
             rows = []
             if isinstance(resp, dict):
                 for k in ("data", "message", "result"):
@@ -309,9 +347,9 @@ class KotakClient:
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             self._throttle()
-            resp = self._plain_client().historical_data(
-                neosymbol=f"{segment}|{token}", interval="1min",
-                from_date=today, to_date=today)
+            resp = self._kotak_call(self._plain_client().historical_data,
+                                    neosymbol=f"{segment}|{token}", interval="1min",
+                                    from_date=today, to_date=today)
             if self._is_rate_limited(resp):
                 self._note_rate_limit(token, "1min")
                 return hit[0] if hit else None
@@ -320,10 +358,10 @@ class KotakClient:
                 px = float(rows[-1][4])
             else:  # market closed / no today data -> last daily close
                 self._throttle()
-                resp = self._plain_client().historical_data(
-                    neosymbol=f"{segment}|{token}", interval="D",
-                    from_date=(datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d"),
-                    to_date=today)
+                resp = self._kotak_call(self._plain_client().historical_data,
+                                        neosymbol=f"{segment}|{token}", interval="D",
+                                        from_date=(datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d"),
+                                        to_date=today)
                 if self._is_rate_limited(resp):
                     self._note_rate_limit(token, "daily")
                     return hit[0] if hit else None
