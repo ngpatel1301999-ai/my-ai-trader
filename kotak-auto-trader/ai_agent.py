@@ -52,6 +52,14 @@ FORMAT (must follow, PLAIN TEXT — no markdown, no asterisks, no hash headings)
 4) End with exactly: Want: (a) ... (b) ... ?
 
 ONLY use the FACTS below. If a number is missing, say so. If headlines are unrelated (submarine, random labs), ignore them and say news was noisy.
+
+HARD FACT RULES (breaking one of these is worse than saying "I don't know"):
+- NEVER invent a P/E, a "technical rating", a target price, a broker recommendation or a percentage that is not literally in FACTS.
+- If FACTS has LIVE_LTP, that is THE price. Never quote a price that appears inside a headline - headlines carry old prices.
+- Headlines are dated. Anything older than 30 days is OLD news: say "announced back in <month>, not new". NEVER call it "recent" or "latest".
+- If several deals were announced together, mention all of them - do not report only one.
+- The swing verdict MUST agree with TECHNICALS: price BELOW the 50DMA and 200DMA = Cautiously bearish, whatever the headlines sound like. Never call a stock in a downtrend a technical buy.
+- If TECHNICALS are missing, say so; do not guess them.
 NEVER claim you updated SL, bought, sold, or cancelled a task. Those need a real tool. If they asked to change SL, say: type /sl SBIN 985
 Match the user's language (English / Hindi / Hinglish).
 """
@@ -99,6 +107,10 @@ class Agent:
     def __init__(self):
         self.mem = Memory()
         self.prof = Profile()
+        # main.py injects this: callable(symbol) -> {"ltp": float, "src": str}.
+        # Gives research answers the LIVE Kotak price instead of a number the AI
+        # copied out of a headline.
+        self.quote_hook = None
 
     def handle(self, text: str, context: str, executor) -> str:
         text = (text or "").strip()
@@ -262,6 +274,14 @@ class Agent:
         if not sym:
             return self._general(text)
         facts = web_tools.nse_research(sym)
+        if self.quote_hook:
+            try:
+                q = self.quote_hook(sym) or {}
+                if q.get("ltp"):
+                    facts["live_ltp"] = q["ltp"]
+                    facts["ltp_src"] = q.get("src") or "kotak-live"
+            except Exception as e:
+                log.warning("live quote hook failed for %s: %s", sym, e)
         return self._write_trade(text, context, facts)
 
     def _wants_detail(self, text: str) -> bool:
@@ -524,15 +544,40 @@ class Agent:
 
     def _facts_block(self, facts: dict) -> str:
         last, prev = facts.get("last"), facts.get("prev")
-        px = f"last={last}" if last else "last=unknown"
+        px = f"yahoo_last={last}" if last else "yahoo_last=unknown"
         if prev:
             px += f" prev_close={prev}"
+        if facts.get("live_ltp"):
+            px = (f"LIVE_LTP={facts['live_ltp']} "
+                  f"(source={facts.get('ltp_src', 'kotak-live')}, USE THIS PRICE) | " + px)
         lines = [f"SYMBOL: {facts['symbol']}", f"COMPANY: {facts['name']}",
-                 f"PRICE: {px}", "HEADLINES:"]
+                 f"PRICE: {px}"]
+        t = facts.get("tech") or {}
+        if t:
+            bits = []
+            if t.get("sma50"):
+                bits.append(f"50DMA={t['sma50']} (price {t.get('vs_sma50', '?')})")
+            if t.get("sma200"):
+                bits.append(f"200DMA={t['sma200']} (price {t.get('vs_sma200', '?')}"
+                            f", {t.get('off_sma200_pct', '?')}% away)")
+            if t.get("hi52"):
+                bits.append(f"52wk_range={t['lo52']}-{t['hi52']}"
+                            f" ({t.get('off_hi52_pct', '?')}% off the high)")
+            if t.get("ret_1y_pct") is not None:
+                bits.append(f"1yr_return={t['ret_1y_pct']}%")
+            if bits:
+                lines.append("TECHNICALS (measured, NOT a rating - never invent one): "
+                             + " | ".join(bits))
+        lines.append("HEADLINES (each dated; TODAY is the reference):")
         for i, n in enumerate(facts.get("news") or [], 1):
             title = web_tools.strip_urls(n.get("title") or "")
             body = web_tools.strip_urls(n.get("body") or "")
-            lines.append(f"  {i}. {title}")
+            d = n.get("date") or "date-unknown"
+            age = n.get("age_days")
+            tag = f"[{d}]" if age is None else f"[{d} = {age:.0f} day(s) old]"
+            if n.get("old"):
+                tag += " <-- STALE: call it OLD news, never 'recent'"
+            lines.append(f"  {i}. {tag} {title}")
             if body:
                 lines.append(f"     {body[:240]}")
         if not facts.get("news"):

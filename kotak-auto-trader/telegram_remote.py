@@ -7,13 +7,40 @@ setMyCommands succeeds (Bot API). We publish that list over HTTPS at start.
 import asyncio
 import json
 import logging
+import os
 import threading
+import time
 import urllib.error
 import urllib.request
 
 log = logging.getLogger("telegram")
 
 TG_LIMIT = 3500
+
+# Telegram allows ONLY ONE getUpdates poller per bot token. If your laptop bot
+# and the Render bot run together, Telegram kills one with HTTP 409 Conflict.
+CONFLICT_MSG = ("TWO BOTS on ONE token: another instance is already polling with "
+                "this TELEGRAM_BOT_TOKEN (your laptop / another server / the old "
+                "deploy still shutting down). Stop the other one - only ONE bot can "
+                "listen. Until then messages are split or missed.")
+
+
+def _is_conflict(exc) -> bool:
+    try:
+        from telegram.error import Conflict
+        if isinstance(exc, Conflict):
+            return True
+    except Exception:
+        pass
+    low = str(exc).lower()
+    return "conflict" in low and ("getupdates" in low or "other bot instance" in low)
+
+
+def _drop_pending() -> bool:
+    """After a restart Telegram replays queued messages. For a TRADING bot, a
+    30-minute-old 'buy 5 reliance' firing late is dangerous - so drop them.
+    Set TG_DROP_PENDING=false if you want the backlog replayed instead."""
+    return os.getenv("TG_DROP_PENDING", "true").strip().lower() in ("1", "true", "yes", "y")
 
 # Shown when the user types /  (1–32 chars [a-z0-9_], no spaces).
 # Plain name = equity. *_commodity / *_currency / *_crypto = that book only.
@@ -148,6 +175,7 @@ class TelegramRemote(threading.Thread):
         self.chat_id = str(chat_id)
         self.app = app
         self.ready = threading.Event()
+        self._last_conflict_log = 0.0   # log a Conflict once per 5 min, not per poll
         # "" while healthy. Set when polling dies or the token/chat id is missing,
         # so the dashboard + /api/status can tell the TRUTH instead of showing
         # a green "connected" next to a dead bot.
@@ -345,26 +373,56 @@ class TelegramRemote(threading.Thread):
             except Exception as e:
                 log.warning("PTB set_my_commands: %s", e)
 
+        def poll_error(exc):
+            """PTB calls this on a failed getUpdates. Without it every failure
+            dumps a 20-line traceback into the Render log."""
+            if _is_conflict(exc):
+                self.error = CONFLICT_MSG
+                if time.time() - self._last_conflict_log > 300:
+                    self._last_conflict_log = time.time()
+                    log.error("TELEGRAM CONFLICT: %s", CONFLICT_MSG)
+                return
+            if isinstance(exc, KeyboardInterrupt) or "Unauthorized" in str(exc):
+                self.error = f"polling stopped: {str(exc)[:160]}"
+                log.error("telegram polling stopped: %s", str(exc)[:200])
+                return
+            self.error = f"polling error: {str(exc)[:160]}"
+            log.warning("telegram polling error (will retry): %s", str(exc)[:200])
+
+        async def handler_error(application, context):
+            exc = getattr(context, "error", None)
+            log.error("telegram handler error: %s", str(exc)[:300])
+
         async def amain():
             app_tg = (Application.builder()
                       .token(self.token)
                       .post_init(post_init)
                       .build())
+            app_tg.add_error_handler(handler_error)
             # Any /command (including /scan@BotName) → cmd_slash
             app_tg.add_handler(MessageHandler(filters.COMMAND, slash))
             app_tg.add_handler(CallbackQueryHandler(button))
             app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
             await app_tg.initialize()
             await app_tg.start()
-            await app_tg.updater.start_polling()
-            log.info("Telegram remote ON")
+            drop = _drop_pending()
+            await app_tg.updater.start_polling(
+                drop_pending_updates=drop,     # never fire stale orders late
+                error_callback=poll_error,     # clean logs, no traceback spam
+            )
+            log.info("Telegram remote ON (drop_pending_updates=%s)", drop)
             self.ready.set()
             await asyncio.Event().wait()
 
         try:
             asyncio.run(amain())
         except Exception as e:
-            # Typical cause: bad token -> "Unauthorized", or no outbound network.
+            # Typical causes: bad token -> "Unauthorized"; HTTP 409 -> two bots
+            # are polling with the same token; no outbound network.
+            if _is_conflict(e):
+                self.error = CONFLICT_MSG
+                log.error("TELEGRAM CONFLICT: %s", CONFLICT_MSG)
+                return
             self.error = f"polling stopped: {e}"
             log.error("telegram polling stopped: %s", e)
             try:

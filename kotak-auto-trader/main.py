@@ -80,6 +80,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("main")
 
+# The Kotak SDK dumps a full JSON blob (request_id, headers, body...) for every
+# 401/424/429. kotak_client.py already logs a clean one-line warning for each of
+# those, so the raw JSON is just noise that hides real problems in Render logs.
+for _noisy in ("neo_api_client", "neo_api_client.rest", "httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.CRITICAL)
+
 
 def now_ist() -> datetime:
     return datetime.now(IST)
@@ -101,6 +107,7 @@ class App:
         self.tasks = TaskEngine("tasks.json")
         self.comm_tasks = TaskEngine("commodity_tasks.json")
         self.agent = Agent()
+        self.agent.quote_hook = self._quote_for_ai   # live Kotak LTP inside AI answers
         self.proposals = {}
         self._pid = 1
         self.universe = []      # [{symbol, trading, token}]
@@ -941,6 +948,22 @@ class App:
         return None
 
     # ---------------- AI ----------------
+    def _quote_for_ai(self, sym: str) -> dict:
+        """Live Kotak LTP for the AI's research answers, so the price shown is
+        REAL and current - not a number copied out of a 2-day-old headline."""
+        try:
+            ts, tok = self.short_to_trading((sym or "").upper())
+            if not tok:
+                return {}
+            raw = self.kotak.get_ltps([tok]) or {}
+            px = raw.get(str(tok)) or raw.get(tok)
+            if not px:
+                return {}
+            return {"ltp": round(float(px), 2), "src": "kotak-live", "trading": ts}
+        except Exception as e:
+            log.warning("live quote for AI failed (%s): %s", sym, e)
+            return {}
+
     def ai_context(self) -> str:
         a = self.swing.book.accuracy()
         return (f"mode={self.s.bot_mode} money={'LIVE-REAL' if self.live else 'PAPER-fake'} "

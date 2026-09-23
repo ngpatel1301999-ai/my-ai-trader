@@ -172,8 +172,74 @@ def yahoo_daily(symbol: str, days: int = 90) -> list:
     return out
 
 
+def _parse_pubdate(s: str):
+    """RSS pubDate -> ('YYYY-MM-DD', age_in_days). (None, None) if unparseable.
+    Without this a 6-month-old article gets presented as 'recent news'."""
+    from datetime import datetime, timezone
+    from email.utils import parsedate_to_datetime
+    try:
+        dt = parsedate_to_datetime((s or "").strip())
+        if dt is None:
+            return None, None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+        if age < -2:                      # clock skew / bad feed data
+            return None, None
+        return dt.strftime("%Y-%m-%d"), round(max(age, 0.0), 1)
+    except Exception:
+        return None, None
+
+
+def _stamp(item: dict, d, age) -> dict:
+    """Attach the publication date + an 'old' flag the AI must respect."""
+    item["date"] = d
+    item["age_days"] = age
+    item["old"] = bool(age is not None and age > 30)
+    return item
+
+
+def yahoo_technicals(symbol: str) -> dict:
+    """REAL moving averages + 52-week range + 1-year return from Yahoo daily
+    candles, so the AI never has to guess a 'technical rating'."""
+    t, res = yahoo_chart(symbol, range="1y", interval="1d")
+    if not res:
+        return {}
+    ts = res.get("timestamp") or []
+    q = ((res.get("indicators") or {}).get("quote") or [{}])[0]
+    closes, highs, lows = [], [], []
+    for i in range(len(ts)):
+        try:
+            h, l, c = q["high"][i], q["low"][i], q["close"][i]
+            if None in (h, l, c):
+                continue
+            highs.append(float(h)); lows.append(float(l)); closes.append(float(c))
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+    if len(closes) < 20:
+        return {}
+
+    def sma(n):
+        return round(sum(closes[-n:]) / n, 2) if len(closes) >= n else None
+
+    last = round(closes[-1], 2)
+    out = {"last": last, "sma50": sma(50), "sma200": sma(200),
+           "hi52": round(max(highs), 2), "lo52": round(min(lows), 2),
+           "bars": len(closes)}
+    if out["sma50"]:
+        out["vs_sma50"] = "ABOVE" if last >= out["sma50"] else "BELOW"
+    if out["sma200"]:
+        out["vs_sma200"] = "ABOVE" if last >= out["sma200"] else "BELOW"
+        out["off_sma200_pct"] = round((last / out["sma200"] - 1) * 100, 1)
+    if len(closes) > 200:
+        out["ret_1y_pct"] = round((last / closes[0] - 1) * 100, 1)
+    if out["hi52"]:
+        out["off_hi52_pct"] = round((last / out["hi52"] - 1) * 100, 1)
+    return out
+
+
 def google_news(query: str, n: int = 5) -> list:
-    """Google News RSS (India). Returns [{title, url, snip}]."""
+    """Google News RSS (India). Returns [{title, url, snip, date, age_days, old}]."""
     out = []
     try:
         url = ("https://news.google.com/rss/search?q="
@@ -189,8 +255,9 @@ def google_news(query: str, n: int = 5) -> list:
             if src_el is not None:
                 src = (src_el.text or "").strip()
             if title:
-                out.append({"title": title[:140], "url": link[:300],
-                            "snip": src})
+                d, age = _parse_pubdate(item.findtext("pubDate") or "")
+                out.append(_stamp({"title": title[:140], "url": link[:300],
+                                   "snip": src}, d, age))
     except Exception as e:
         log.warning("google_news failed: %s", e)
     return out
@@ -235,10 +302,19 @@ def nse_research(symbol: str) -> dict:
             continue
         seen.add(key)
         body = strip_urls(h.get("body") or "")
-        clean.append({"title": title, "body": body, "snip": "", "url": ""})
+        clean.append(_stamp({"title": title, "body": body, "snip": "", "url": ""},
+                            h.get("date"), h.get("age_days")))
         if len(clean) >= 6:
             break
-    return {"symbol": symbol, "name": name, "last": last, "prev": prev, "news": clean}
+    # newest first so the AI leads with what actually just happened
+    clean.sort(key=lambda r: (r.get("age_days") if r.get("age_days") is not None else 9999.0))
+    tech = {}
+    try:
+        tech = yahoo_technicals(symbol) or {}
+    except Exception as e:
+        log.warning("technicals %s: %s", symbol, e)
+    return {"symbol": symbol, "name": name, "last": last, "prev": prev,
+            "news": clean, "tech": tech}
 
 
 _URL_RE = re.compile(r"https?://\S+|\bwww\.\S+|\b[\w.-]+\.(com|in|org|net|co)\b", re.I)
@@ -297,8 +373,9 @@ def _rss_items(url: str, n: int = 8) -> list:
             if desc.lower() in title.lower() or len(desc) < 40:
                 desc = ""
             if title:
-                out.append({"title": title[:160], "body": desc[:400],
-                            "snip": "", "url": ""})
+                d, age = _parse_pubdate(item.findtext("pubDate") or "")
+                out.append(_stamp({"title": title[:160], "body": desc[:400],
+                                   "snip": "", "url": ""}, d, age))
     except Exception as e:
         log.warning("rss %s: %s", url[:60], e)
     return out
@@ -365,8 +442,9 @@ def news_digest(query: str, n: int = 4) -> list:
             body = strip_urls(h.get("body") or "")
             if body.lower() in title.lower():
                 body = ""
-            rows.append({"title": title[:160], "body": body[:400],
-                         "snip": "", "url": ""})
+            rows.append(_stamp({"title": title[:160], "body": body[:400],
+                                "snip": "", "url": ""},
+                               h.get("date"), h.get("age_days")))
 
     for fu in feeds:
         add(_rss_items(fu, 10), require_key=True)
@@ -374,8 +452,10 @@ def news_digest(query: str, n: int = 4) -> list:
             break
     if len(rows) < n:
         add(google_news(q, n + 3), require_key=False)
-    # prefer rows that have story text
-    rows.sort(key=lambda r: (0 if r.get("body") else 1))
+    # NEWEST FIRST, then prefer rows that have story text. Sorting by "has body"
+    # alone let a 6-month-old scoop sit above today's headline.
+    rows.sort(key=lambda r: (r.get("age_days") if r.get("age_days") is not None else 9999.0,
+                             0 if r.get("body") else 1))
     return rows[:n]
 
 
