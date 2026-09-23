@@ -1725,11 +1725,11 @@ def get_positions():
             return {"positions": [], "error": str(e)}
     return {"positions": []}
 
-# Bot runner function - Upar bani App class ko use karega
+# Bot runner function - Upar bani app class ko use karega
 def run_trading_bot():
     global bot_app
-    # Yahan App() tabhi call hoga jab main.py poora load ho chuka hoga
-    bot_app = App()
+    # Yahan app() tabhi call hoga jab main.py poora load ho chuka hoga
+    bot_app = app()
     bot_app.run()
 
 if __name__ == "__main__":
