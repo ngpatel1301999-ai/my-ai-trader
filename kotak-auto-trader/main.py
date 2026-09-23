@@ -1688,6 +1688,54 @@ def main():
             log.exception("Loop error (keeps running): %s", e)
             time.sleep(10)
 
+# ==========================================
+# FASTAPI ENDPOINTS & BOT THREADING SETUP
+# ==========================================
+web_app = FastAPI()
+
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+bot_app = None 
+
+@web_app.get("/")
+def home():
+    return {"message": "AI Auto Trader API is Running"}
+
+@web_app.get("/api/status")
+def get_status():
+    return {
+        "status": "online",
+        "paper_trading": getattr(bot_app, "is_paper", True) if bot_app else True
+    }
+
+@web_app.get("/api/positions")
+def get_positions():
+    if bot_app and hasattr(bot_app, "kotak"):
+        try:
+            positions = bot_app.kotak.get_positions()
+            return {"positions": positions}
+        except Exception as e:
+            return {"positions": [], "error": str(e)}
+    return {"positions": []}
+
+# Bot runner function - Upar bani App class ko use karega
+def run_trading_bot():
+    global bot_app
+    # Yahan App() tabhi call hoga jab main.py poora load ho chuka hoga
+    bot_app = App()
+    bot_app.run()
 
 if __name__ == "__main__":
+    # 1. Trading Bot ko Background Thread me chalayein
+    bot_thread = threading.Thread(target=run_trading_bot, daemon=True)
+    bot_thread.start()
+
+    # 2. FastAPI Web Server ko Render Port par chalayein
+    uvicorn.run(web_app, host="0.0.0.0", port=10000)
     main()
