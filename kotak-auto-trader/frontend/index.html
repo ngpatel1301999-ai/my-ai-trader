@@ -83,9 +83,25 @@
             <strong>Build:</strong> <span id="build">-</span>
         </p>
         <button class="btn" onclick="fetchStatus()">Refresh Status</button>
+        <button class="btn" onclick="wakeBot()">🔔 Wake Bot</button>
         <button class="btn" onclick="startBot()">▶ Start Bot</button>
         <button class="btn danger" onclick="stopBot()">■ Stop Bot</button>
         <div id="msg"></div>
+
+        <!-- Keep-alive: THIS TAB is what stops Render's free plan sleeping -->
+        <div id="keepalive" style="margin-top:14px;padding:10px 12px;border-radius:8px;
+             background:#0f172a;border:1px solid #334155;font-size:13px;line-height:1.6">
+            <div style="font-weight:700">🔋 Keep-alive: <span id="ka-state"
+                 style="color:#f59e0b">starting…</span></div>
+            <div style="color:#94a3b8">Last ping: <span id="ka-ago">-</span> &nbsp;·&nbsp;
+                 Next in <span id="ka-next">-</span>s</div>
+            <div style="color:#64748b;font-size:12px;margin-top:4px">
+                Render ka free plan 15 min bina HTTP traffic ke bot ko sula deta hai, aur
+                <b>Telegram message use wake NAHI kar sakta</b>. Ye tab har 20s me ping karta
+                hai, to <b>tab khula rahe to bot zinda rahega</b>. Tab band / phone lock /
+                PC sleep = pinging band = bot 15 min me so jayega.
+            </div>
+        </div>
     </div>
 
     <!-- Positions Card -->
@@ -128,11 +144,58 @@
         return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
     }
 
+    // ---- keep-alive heartbeat state ----
+    let failCount = 0;        // consecutive failed pings
+    let lastPing = null;      // Date of last SUCCESSFUL ping
+    let kaTick = 0;           // seconds since last ping (for the countdown)
+
+    function kaSet(state, color) {
+        const el = document.getElementById('ka-state');
+        if (el) { el.innerText = state; el.style.color = color; }
+    }
+
+    /** Render's free plan answers with an HTML "loading" page (502/503) while a
+     *  service spins up, so res.json() throws. That is NOT a crash - it means
+     *  "waking up, wait ~1 minute". Tell the user that instead of a red ERROR. */
+    function showWaking() {
+        failCount++;
+        const badge = document.getElementById('bot-status');
+        badge.style.color = '#000';
+        if (failCount <= 9) {          // under ~3 minutes
+            badge.innerText = '⏳ WAKING UP…';
+            badge.style.background = '#f59e0b';
+            kaSet(`waking the bot… (${failCount * 20}s, ~1 min lagenge)`, '#f59e0b');
+            show('Bot soya hua tha - Render use jaga raha hai. ~1 minute rukho, ye page khula rakho.', false);
+        } else {
+            badge.innerText = 'NO RESPONSE';
+            badge.style.background = '#ef4444';
+            badge.style.color = '#fff';
+            kaSet(`no response after ${Math.round(failCount * 20 / 60)} min - Render dashboard dekho`, '#ef4444');
+            show('Bot 3+ minute se jawab nahi de raha. Render dashboard me Logs/Error kholo - deploy fail hua ho sakta hai.', true);
+        }
+        // keep hammering so the spin-up completes
+        setTimeout(fetchStatus, 20000);
+    }
+
+    async function wakeBot() {
+        failCount = 0;
+        kaSet('pinging /health now…', '#f59e0b');
+        show('Bot ko jaga rahe hain… pehli baar ~1 minute lag sakta hai. Is page ko khula rakho.', false);
+        try { await fetch(`${BACKEND_URL}/health`, { cache: 'no-store' }); } catch (e) {}
+        fetchStatus();
+    }
+
     async function fetchStatus() {
         const badge = document.getElementById('bot-status');
         try {
-            const res = await fetch(`${BACKEND_URL}/api/status`);
-            const d = await res.json();
+            const res = await fetch(`${BACKEND_URL}/api/status`, { cache: 'no-store' });
+            if (!res.ok) { showWaking(); return; }   // 502/503 = Render spin-up page
+            let d;
+            try { d = await res.json(); }
+            catch (e) { showWaking(); return; }       // HTML loading page, not JSON
+            failCount = 0;
+            lastPing = new Date();
+            kaSet('ACTIVE - ye tab bot ko jaaga rakha hai ✅', '#22c55e');
             const running = d.bot === 'running';
             badge.innerText = (d.status || 'unknown').toUpperCase();
             badge.style.background = running ? '#22c55e' : (d.bot === 'crashed' ? '#ef4444' : '#f59e0b');
@@ -146,10 +209,8 @@
             document.getElementById('build').innerText = d.build || '-';
             show(d.error ? `Last error: ${d.error}` : '', false);
         } catch (err) {
-            badge.innerText = 'DISCONNECTED';
-            badge.style.background = '#ef4444';
-            badge.style.color = '#fff';
             console.error('status fetch failed', err);
+            showWaking();          // network error = asleep, not broken
         }
     }
 
@@ -203,7 +264,34 @@
         } catch (err) { show('Stop failed: ' + err, false); }
     }
 
-    window.onload = () => { fetchStatus(); fetchPositions(); setInterval(fetchStatus, 20000); };
+    // tick the "last ping / next in Ns" readout once a second
+    function kaTickFn() {
+        kaTick++;
+        const ago = document.getElementById('ka-ago');
+        const nxt = document.getElementById('ka-next');
+        if (ago) ago.innerText = lastPing
+            ? `${kaTick}s pehle (${lastPing.toLocaleTimeString()})`
+            : 'abhi tak koi successful ping nahi';
+        if (nxt) nxt.innerText = Math.max(0, 20 - kaTick);
+        if (kaTick >= 20) kaTick = 0;
+    }
+
+    window.onload = () => {
+        fetchStatus(); fetchPositions();
+        // This 20s poll IS the keep-alive: every /api/status hit counts as
+        // inbound traffic, so Render never reaches its 15-minute idle timeout.
+        setInterval(fetchStatus, 20000);
+        setInterval(fetchPositions, 20000);
+        setInterval(kaTickFn, 1000);
+
+        // Browsers throttle background tabs, so the moment you come back to this
+        // tab, ping immediately instead of waiting for the next interval.
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) { failCount = 0; kaTick = 0; fetchStatus(); }
+        });
+        // Also re-ping when the laptop/phone wakes from sleep.
+        window.addEventListener('focus', () => { failCount = 0; fetchStatus(); });
+    };
 </script>
 
 </body>
