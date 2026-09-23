@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kotak Neo Trading Bot Control</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+    body { background-color: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+    .card { background-color: #1e293b; padding: 30px; border-radius: 16px; width: 100%; max-width: 420px; text-align: center; border: 1px solid #334155; }
+    .status-container { display: flex; align-items: center; justify-content: center; gap: 10px; background-color: #0f172a; padding: 12px; border-radius: 8px; margin: 20px 0; border: 1px solid #334155; }
+    .status-dot { width: 12px; height: 12px; border-radius: 50%; background-color: #ef4444; }
+    .status-dot.active { background-color: #22c55e; box-shadow: 0 0 8px #22c55e; }
+    .btn-group { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; }
+    button { width: 100%; padding: 14px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-connect { background-color: #22c55e; color: #052e16; }
+    .btn-disconnect { background-color: #ef4444; color: #450a0a; }
+    .log-box { background-color: #020617; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.8rem; color: #38bdf8; text-align: left; height: 100px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Telegram Bot Control</h2>
+    <p style="color: #94a3b8; font-size: 0.85rem; margin-top: 5px;">Kotak Neo Paper Trading Engine</p>
+
+    <div class="status-container">
+      <div id="statusDot" class="status-dot"></div>
+      <span id="statusText" style="font-weight: 600;">Status: Disconnected</span>
+    </div>
+
+    <div class="btn-group">
+      <button id="btnConnect" class="btn-connect" onclick="startBot()">Connect Bot</button>
+      <button id="btnDisconnect" class="btn-disconnect" onclick="stopBot()" disabled>Disconnect Bot</button>
+    </div>
+
+    <div id="logBox" class="log-box">> Ready to connect...</div>
+  </div>
+
+  <script>
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const btnConnect = document.getElementById("btnConnect");
+    const btnDisconnect = document.getElementById("btnDisconnect");
+    const logBox = document.getElementById("logBox");
+
+    function log(msg) { logBox.innerHTML += `<br>> ${msg}`; logBox.scrollTop = logBox.scrollHeight; }
+
+    async function startBot() {
+      btnConnect.disabled = true;
+      log("Connecting to bot...");
+      try {
+        const res = await fetch('/start', { method: 'POST' });
+        const data = await res.json();
+        if(res.ok) {
+          statusDot.classList.add("active");
+          statusText.innerText = "Status: Connected & Running";
+          btnDisconnect.disabled = false;
+          log(data.message);
+        } else { btnConnect.disabled = false; log(data.message); }
+      } catch (e) { btnConnect.disabled = false; log("Server Connection Failed!"); }
+    }
+
+    async function stopBot() {
+      btnDisconnect.disabled = true;
+      log("Disconnecting bot...");
+      try {
+        const res = await fetch('/stop', { method: 'POST' });
+        const data = await res.json();
+        if(res.ok) {
+          statusDot.classList.remove("active");
+          statusText.innerText = "Status: Disconnected";
+          btnConnect.disabled = false;
+          log(data.message);
+        } else { btnDisconnect.disabled = false; log(data.message); }
+      } catch (e) { btnDisconnect.disabled = false; log("Failed to stop bot!"); }
+    }
+  </script>
+</body>
+</html>
