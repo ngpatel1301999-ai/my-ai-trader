@@ -399,7 +399,7 @@
                     <td data-label="Symbol">${pos.symbol}</td>
                     <td data-label="Type">${typeCell}</td>
                     <td data-label="Qty">${pos.qty}</td>
-                    <td data-label="Buy${ccy}">${pos.buy_price}${ccy}</td>
+                    <td data-label="Buy">${pos.buy_price}${ccy}</td>
                     <td data-label="LTP">${hasLtp ? pos.ltp + ccy : '&mdash;'}</td>
                     <td data-label="P&amp;L" style="color: ${hasLtp ? (pnl >= 0 ? '#22c55e' : '#ef4444') : '#94a3b8'}; font-weight:700">${hasLtp ? (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ccy : '&mdash;'}</td>
                 </tr>`;
