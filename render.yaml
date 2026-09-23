@@ -1,0 +1,38 @@
+# Render blueprint (OPTIONAL).
+#
+# Your service already exists, so the easiest path is to keep it and just set
+# the 3 things below in the Render dashboard:
+#   Root Directory : kotak-auto-trader
+#   Build Command  : pip install -r requirements.txt
+#   Start Command  : python main.py
+#   Environment    : PYTHON_VERSION = 3.12.8   (highest precedence on Render)
+#
+# This file is only used if you create a NEW service from the repo
+# (Render dashboard -> New + -> Blueprint). It must sit at the repo ROOT.
+services:
+  - type: web
+    name: my-ai-trader
+    runtime: python
+    rootDir: kotak-auto-trader
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    envVars:
+      # Render's default is Python 3.14.3 — brand new, and pandas / pydantic-core
+      # wheels are not always there yet. 3.12 is boring and reliable.
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: BOT_MODE
+        value: swing
+      - key: TRADING_MODE
+        value: paper
+      - key: ENABLE_LIVE_ORDERS
+        value: "false"
+      # Mount a Render Disk at /var/data (Dashboard -> Disks -> Add disk) and this
+      # makes tasks.json / swing_positions.json / swing_trades.csv survive restarts.
+      - key: DATA_DIR
+        value: /var/data
+      # Secrets — set these by hand in the dashboard, never commit them:
+      #   NEO_CONSUMER_KEY, NEO_MOBILE_NUMBER, NEO_UCC, NEO_MPIN, NEO_TOTP_SECRET,
+      #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY

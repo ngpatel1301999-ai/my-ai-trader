@@ -12,10 +12,13 @@ import logging
 import os
 from datetime import datetime
 
+import paths
+
 log = logging.getLogger("swing")
 
-POS_FILE = "swing_positions.json"   # open multi-day positions (survives restart)
-TRADES_FILE = "swing_trades.csv"    # closed-trade journal -> accuracy stats
+# state lives in paths.data_dir() -> survives restarts when DATA_DIR is a mounted disk
+POS_FILE = paths.data_path("swing_positions.json")    # open multi-day positions
+TRADES_FILE = paths.data_path("swing_trades.csv")     # closed-trade journal -> accuracy
 
 
 # ---------------- indicators (plain python, no extra library) ----------------

@@ -4,10 +4,12 @@ import json
 import logging
 import os
 
+import paths
+
 log = logging.getLogger("memory")
 
-MEM_FILE = "memory.json"
-PROFILE_FILE = "user_profile.json"
+MEM_FILE = paths.data_path("memory.json")
+PROFILE_FILE = paths.data_path("user_profile.json")
 MAX_TURNS = 8
 
 

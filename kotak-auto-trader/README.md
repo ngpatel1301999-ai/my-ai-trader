@@ -28,7 +28,10 @@ No TradingView needed. Phone (Telegram) is the remote.
 
 | File | Work |
 |---|---|
-| `main.py` | App brain + scheduler. Run this. |
+| `main.py` | App brain + scheduler **+ FastAPI dashboard**. Run this. |
+| `app.py` | 3-line wrapper so `uvicorn app:app` / `python app.py` also work |
+| `paths.py` | Where state files live (`DATA_DIR` = mounted disk on Render) |
+| `frontend/index.html` | Dashboard served at `/` (start/stop, status, positions) |
 | `swing.py` | Swing score + position book + journal |
 | `ai_agent.py` | Gemini chat → actions (stdlib only, no install) |
 | `tasks.py` | Pending auto-tasks |
@@ -63,6 +66,55 @@ python backtest_swing.py --generate-sample
 python backtest_swing.py --csv swing_sample.csv     # plumbing test
 python main.py              # PAPER swing + AI. Nothing real happens.
 ```
+
+## SETUP — Step 4b: Deploy on Render (cloud, 24×7) ☁️
+
+One process serves **both**: the Telegram/trading bot (daemon thread) and the
+web dashboard (FastAPI). Render needs a port, so the web server is the front
+door and the bot auto-starts with it.
+
+**Render dashboard → your service → Settings**
+
+| Setting | Value |
+|---|---|
+| Root Directory | `kotak-auto-trader` |
+| Runtime | Python |
+| Build Command | `pip install -r requirements.txt` |
+| Start Command | `python main.py` |
+| Health Check Path | `/health` |
+
+**Environment → add** (these are the ones that fixed the broken deploy):
+
+```
+PYTHON_VERSION = 3.12.8      # Render defaults to 3.14.3 = too new for pandas/pydantic wheels
+DATA_DIR       = /var/data   # only if you attach a Disk (see below)
+BOT_AUTOSTART  = true        # false = bot waits for you to press Start on the dashboard
+```
+Plus your secrets: `NEO_CONSUMER_KEY`, `NEO_MOBILE_NUMBER`, `NEO_UCC`, `NEO_MPIN`,
+`NEO_TOTP_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GEMINI_API_KEY`,
+`BOT_MODE=swing`, `TRADING_MODE=paper`, `ENABLE_LIVE_ORDERS=false`.
+
+**Then:** Disks → Add disk → Mount path `/var/data`, 1 GB.
+Without a disk, `tasks.json` / `swing_positions.json` / `swing_trades.csv` are
+**wiped on every deploy** (Render's disk is ephemeral).
+
+**Check it worked**
+
+1. Logs show `Uvicorn running on http://0.0.0.0:10000` **and** `Telegram remote is live`
+2. Open your service URL → dashboard. Status should read `RUNNING`.
+3. `https://YOUR-SERVICE.onrender.com/api/log?lines=50` → tail of `trades.log`
+4. Telegram: send `/status`
+
+**⚠️ Two Render gotchas for a trading bot**
+
+- **Kotak IP whitelist:** Render's outbound IP changes on redeploy, so
+  `script-details/*` (token search) will reject you. The bot survives this —
+  it uses the built-in token map + `historical-data` and starts in
+  **ASSISTANT MODE** (chat/research/tasks work, Kotak retried every 5 min).
+  For real trading use an Indian VPS with a static IP (Step 5).
+- **Free plan sleeps** after ~15 min with no HTTP traffic → Telegram polling
+  stops. Use a paid instance (or an uptime pinger on `/health`) if you need it
+  always listening.
 
 ## SETUP — Step 5: Go LIVE (only after 1 profitable paper month)
 
@@ -135,10 +187,20 @@ Your bot now answers like a top AI assistant:
 
 ## Troubleshooting
 
+- **`TypeError: Flask.__call__() missing 2 required positional arguments`** →
+  you are on the old `main.py`. It did `from app import app` (the Flask object)
+  and then called `app()` instead of `App()`. Fixed: `app.py` is now a wrapper,
+  `main.py` has no Flask at all. Pull the latest.
+- **`GET /` returns 404 on Render** → the old first FastAPI app had no `/`
+  route. Now `/` serves the dashboard and accepts HEAD (Render's probe).
+- **Bot thread dies but the service stays "live"** → check `/api/status` →
+  `bot` must be `running`; `error` and `telegram` fields tell you why not.
 - TOTP wrong → phone clock must be exact (automatic time ON)
-- "IP not whitelisted" → IP changed; update in Kotak dashboard
+- "IP not whitelisted" → IP changed; update in Kotak dashboard (Render IPs rotate —
+  use a VPS for live)
 - AI dumb replies → check GEMINI_API_KEY; free quota resets daily
 - Order rejected → low margin / BE-category stock / market closed → check Neo app + trades.log
 - Swing sell fails → BTST/T2T limits; stick to liquid largecaps
+- Tasks/positions vanished after a deploy → set `DATA_DIR=/var/data` and attach a Disk
 
 ⚠️ Educational code. You are responsible for your orders. Start tiny.

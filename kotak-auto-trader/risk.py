@@ -2,7 +2,9 @@
 import os
 from datetime import datetime
 
-KILL_FILE = "KILLSWITCH"
+import paths
+
+KILL_FILE = paths.data_path("KILLSWITCH")
 
 
 class RiskManager:

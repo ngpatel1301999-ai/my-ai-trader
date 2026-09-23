@@ -1,76 +1,42 @@
-"""MAIN FILE. Run:  python main.py
+"""MAIN FILE — Telegram bot + trading loop + web dashboard in ONE process.
+
+Run locally:   python main.py
+Run on Render: python main.py            (Start Command)
+   or better:  uvicorn main:web_app --host 0.0.0.0 --port $PORT --workers 1
+
 BOT_MODE=swing (default) | intraday | both.  Default = PAPER (fake money).
 AI chat + tasks + approvals all flow through the App class below.
 No Kotak yet? Bot starts in ASSISTANT MODE (chat/research/tasks work,
 trading waits + auto-reconnects). Tip: run with ./supervise.sh.
+
+WEB: "/" serves frontend/index.html, "/health" is for Render,
+"/api/status" + "/api/positions" feed the dashboard, "/start" + "/stop"
+control the bot thread. The bot auto-starts with the web server
+(BOT_AUTOSTART=false to disable).
 """
 import difflib
+import os
 import logging
 import sys
+import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from app import app
 
-import threading
-import uvicorn
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-# FastAPI instance
-web_app = FastAPI()
-
-# HTML file ko access allow karne ke liye (CORS)
-web_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Global app variable (jahan aapka trading logic hai)
-bot_app = None 
-
-@web_app.get("/api/status")
-def get_status():
-    return {
-        "status": "online",
-        "paper_trading": getattr(bot_app, "is_paper", True)
-    }
-
-@web_app.get("/api/positions")
-def get_positions():
-    # Kotak API ya paper book se positions return karein
-    if bot_app and hasattr(bot_app, "kotak"):
-        try:
-            positions = bot_app.kotak.get_positions()
-            return {"positions": positions}
-        except Exception as e:
-            return {"positions": [], "error": str(e)}
-    return {"positions": []}
-
-def run_trading_bot():
-    global bot_app
-    bot_app = app()
-    bot_app.run() # Aapka main loop
-
-if __name__ == "__main__":
-    # 1. Trading Bot ko Background Thread me chalayein
-    bot_thread = threading.Thread(target=run_trading_bot, daemon=True)
-    bot_thread.start()
-
-    # 2. Web API Server ko Main Thread me chalayein
-    uvicorn.run(web_app, host="0.0.0.0", port=10000)
-
-# Windows console (cp1252) cannot print emoji -> force UTF-8 so logs never crash
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
+
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from config import SETTINGS
+import paths
 from kotak_client import KotakClient, BUILD as KC_BUILD
 try:
     from build_stamp import BUILD as MAIN_BUILD
@@ -101,11 +67,16 @@ COMMON_SYMBOLS = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "TMPV", "TMCV", "SBIN",
                   "ICICIBANK", "LT", "AXISBANK", "KOTAKBANK", "ITC", "HINDUNILVR",
                   "BHARTIARTL", "MARUTI", "TITAN", "SUNPHARMA", "NTPC", "ONGC"]
 
+LOG_FILE = os.path.join(paths.data_dir(), "trades.log")
+_handlers = [logging.StreamHandler()]
+try:                      # a read-only disk must never stop the bot
+    _handlers.insert(0, logging.FileHandler(LOG_FILE, encoding="utf-8"))
+except Exception:
+    pass
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[logging.FileHandler("trades.log", encoding="utf-8"),
-              logging.StreamHandler()],
+    handlers=_handlers,
 )
 log = logging.getLogger("main")
 
@@ -1548,195 +1519,435 @@ class IntradayEngine:
         return f"Intraday PAPER closed. P&L {total:+.2f}."
 
 
-# ================================================================= main loop
-def main():
-    print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
-    problems = SETTINGS.validate()
-    if problems:
-        print("❌ Fix .env first:")
-        for p in problems:
-            print("  -", p)
-        return
-    for w in SETTINGS.warnings():
-        print("⚠️", w)
+# ================================================================= bot runner
+# The bot is ONE object shared by Telegram, the trading loop and the web API.
+# It runs in a daemon thread so the web server (main thread) keeps answering
+# Render's health checks even while the bot is scanning / trading.
+_bot = None                     # App instance (None until started)
+_bot_thread = None              # threading.Thread running run_bot_once()
+_bot_lock = threading.Lock()    # guards start/stop from the web endpoints
+_bot_stop = threading.Event()   # set -> loop exits cleanly
+_bot_error = ""                 # last crash reason (shown on the dashboard)
+_bot_started_at = None          # datetime the bot was started
+_tg = None                      # TelegramRemote thread
 
-    app = App()
-    app.resolve_universe()
-    if app.universe:
-        log.info("Universe: %s", [u["trading"] for u in app.universe])
-        start_note = f"Watch: {', '.join(u['symbol'] for u in app.universe)}"
-    else:
-        print("⚠️ Kotak NOT connected — starting in ASSISTANT MODE.")
-        print("   Chat/research/tasks work. Trading waits + auto-retries every 5 min.")
-        print("   Fix: correct NEO_CONSUMER_KEY in .env, then restart (or wait for auto-retry).")
-        start_note = ("🔌 Assistant mode: Kotak not connected yet.\n"
-                      "Chat/research/tasks work. Trading unlocks when key is fixed.")
-    tg = TelegramRemote(SETTINGS.tg_token, SETTINGS.tg_chat_id, app)
-    tg.start()
-    ready = getattr(tg, "ready", None)
-    if ready is None:
-        log.warning("telegram_remote.py is OLD (no ready). Copy telegram_remote.py from the zip.")
-        time.sleep(3)
-    elif not ready.wait(timeout=25):
-        log.warning("Telegram polling slow to start — messages in the next few seconds may be missed")
-    paper = "🟢 PAPER (fake money — no live orders)"
-    mismatch = ""
-    if MAIN_BUILD != AGENT_BUILD:
-        mismatch = (f"⚠️ COPY MISMATCH: main={MAIN_BUILD} agent={AGENT_BUILD}. "
-                    "Overwrite ALL .py from the zip (including build_stamp.py).\n")
-    app.alert(f"🤖 Bot started: {SETTINGS.bot_mode.upper()} {paper}\n"
-              f"{mismatch}{start_note}\nBUILD {MAIN_BUILD}  agent={AGENT_BUILD}\n"
-              f"Ask anything — I answer THAT question, not a generic news dump.\n"
-              f"Type / for commands. Telegram is listening now.")
 
+def bot_state() -> str:
+    if _bot_thread and _bot_thread.is_alive():
+        return "running"
+    if _bot_error:
+        return "crashed"
+    if _bot is not None:
+        return "stopped"
+    return "not_started"
+
+
+def run_bot_once(app_obj: "App"):
+    """Build Telegram remote + run the trading loop until stopped.
+
+    Missing Kotak keys do NOT stop the bot any more: it starts in ASSISTANT
+    MODE (chat / research / tasks work) and retries the connection every 5 min.
+    """
+    global _tg, _bot_error
+    try:
+        problems = SETTINGS.validate()
+        if problems:
+            log.warning("Config incomplete -> ASSISTANT MODE. Missing:")
+            for pr in problems:
+                log.warning("  - %s", pr)
+        for w in SETTINGS.warnings():
+            log.warning("%s", w)
+
+        app_obj.resolve_universe()
+        if app_obj.universe:
+            log.info("Universe: %s", [u["trading"] for u in app_obj.universe])
+            start_note = f"Watch: {', '.join(u['symbol'] for u in app_obj.universe)}"
+        else:
+            log.warning("Kotak NOT connected - starting in ASSISTANT MODE.")
+            start_note = ("\U0001f50c Assistant mode: Kotak not connected yet.\n"
+                          "Chat/research/tasks work. Trading unlocks when the key is fixed.")
+
+        _tg = TelegramRemote(SETTINGS.tg_token, SETTINGS.tg_chat_id, app_obj)
+        _tg.start()                       # its own thread + its own asyncio loop
+        ready = getattr(_tg, "ready", None)
+        if ready is None:
+            log.warning("telegram_remote.py is OLD (no ready). Copy the new one.")
+            time.sleep(3)
+        elif not ready.wait(timeout=25):
+            log.warning("Telegram polling slow to start - first messages may be missed")
+        tg_ok, tg_why = _tg_status()
+        if tg_ok:
+            log.info("Telegram remote is live")
+        else:
+            log.error("Telegram remote NOT live: %s", tg_why)
+
+        paper = "\U0001f7e2 PAPER (fake money - no live orders)"
+        mismatch = ""
+        if MAIN_BUILD != AGENT_BUILD:
+            mismatch = (f"\u26a0\ufe0f COPY MISMATCH: main={MAIN_BUILD} agent={AGENT_BUILD}. "
+                        "Overwrite ALL .py files (including build_stamp.py).\n")
+        tg_line = ("Type / for commands. Telegram is listening now."
+                   if tg_ok else
+                   f"\u26a0\ufe0f Telegram OFF: {tg_why}")
+        app_obj.alert(f"\U0001f916 Bot started: {SETTINGS.bot_mode.upper()} {paper}\n"
+                      f"{mismatch}{start_note}\nBUILD {MAIN_BUILD}  agent={AGENT_BUILD}\n"
+                      "Ask anything - I answer THAT question, not a generic news dump.\n"
+                      f"{tg_line}")
+
+        loop(app_obj)
+    except Exception as e:
+        _bot_error = f"{type(e).__name__}: {e}"
+        log.exception("BOT CRASHED: %s", e)
+
+
+def loop(app_obj: "App"):
+    """The trading loop. Exits when /stop is pressed (or the process dies)."""
     last_guard = 0.0
     last_kotak_retry = 0.0
     eod_sent = False
-    while True:
+    while not _bot_stop.is_set():
         try:
             now = now_ist()
             if now.weekday() >= 5:
-                if getattr(app, "comm", None):
-                    if app.comm.positions:
-                        app.comm.tick(app.alert)
-                    app.run_due_comm_tasks()
-                    time.sleep(30)
+                if getattr(app_obj, "comm", None):
+                    if app_obj.comm.positions:
+                        app_obj.comm.tick(app_obj.alert)
+                    app_obj.run_due_comm_tasks()
+                    _sleep(30)
                 else:
-                    time.sleep(120)
+                    _sleep(120)
                 continue
             # ---- assistant mode: no Kotak -> chat works, retry connection ----
-            if not app.universe:
+            if not app_obj.universe:
                 if time.time() - last_kotak_retry > 300:
                     last_kotak_retry = time.time()
-                    app.resolve_universe()
-                    if app.universe:
-                        app.alert(f"🔌 Kotak CONNECTED! Watching: "
-                                  f"{', '.join(u['symbol'] for u in app.universe)}")
-                app.run_due_tasks({}, now)  # time/notify tasks still work
-                app.run_due_comm_tasks()
-                time.sleep(15)
+                    app_obj.resolve_universe()
+                    if app_obj.universe:
+                        app_obj.alert(f"\U0001f50c Kotak CONNECTED! Watching: "
+                                      f"{', '.join(u['symbol'] for u in app_obj.universe)}")
+                app_obj.run_due_tasks({}, now)   # time/notify tasks still work
+                app_obj.run_due_comm_tasks()
+                _sleep(15)
                 continue
             if not past(now, SETTINGS.login_time):
-                time.sleep(30)
+                _sleep(30)
                 continue
-            if not app.kotak.ensure_login():
+            if not app_obj.kotak.ensure_login():
                 log.error("Login failing. Retry in 60s.")
-                time.sleep(60)
+                _sleep(60)
                 continue
-            if app.today != now.date():
-                app.today = now.date()
-                app.risk.reset_if_new_day(now)
-                app.intra.reset_day()
-                app.swing.reset_day(now.date())
-                app.swing.last_scan = None
+            if app_obj.today != now.date():
+                app_obj.today = now.date()
+                app_obj.risk.reset_if_new_day(now)
+                app_obj.intra.reset_day()
+                app_obj.swing.reset_day(now.date())
+                app_obj.swing.last_scan = None
                 eod_sent = False
             in_hours = past(now, SETTINGS.market_open) and not past(now, SETTINGS.hard_stop)
             # intraday fast loop
             if SETTINGS.intraday_on and in_hours and not past(now, "15:25"):
-                app.intra.poll_once(now)
+                app_obj.intra.poll_once(now)
             # swing guardian + tasks: every 1s when a position or task is open
-            hot = bool(app.swing.book.positions) or bool(app.tasks.open_tasks())
+            hot = bool(app_obj.swing.book.positions) or bool(app_obj.tasks.open_tasks())
             guard_every = 1 if hot else SETTINGS.guardian_seconds
             if SETTINGS.swing_on and in_hours and time.time() - last_guard >= guard_every:
                 last_guard = time.time()
-                toks = [p["token"] for p in app.swing.book.positions.values()]
-                for t in app.tasks.open_tasks():
+                toks = [p["token"] for p in app_obj.swing.book.positions.values()]
+                for t in app_obj.tasks.open_tasks():
                     if t.get("symbol"):
-                        _, tok = app.short_to_trading(t["symbol"])
+                        _, tok = app_obj.short_to_trading(t["symbol"])
                         if tok:
                             toks.append(tok)
-                ltps, raw = {}, app.kotak.get_ltps(sorted(set(toks))) if toks else {}
+                ltps, raw = {}, app_obj.kotak.get_ltps(sorted(set(toks))) if toks else {}
                 for tok, px in raw.items():
-                    sym = app.tok2sym.get(tok)
+                    sym = app_obj.tok2sym.get(tok)
                     if sym:
                         ltps[sym] = px
                         ltps[sym.replace("-EQ", "")] = px
                     else:
-                        for t in app.tasks.open_tasks():
+                        for t in app_obj.tasks.open_tasks():
                             if t.get("symbol"):
                                 ltps[t["symbol"]] = px
                                 ltps[t["symbol"] + "-EQ"] = px
-                app.swing.guardian_tick(ltps)
-                app.run_due_tasks(ltps, now)
-                app.run_due_comm_tasks()
+                app_obj.swing.guardian_tick(ltps)
+                app_obj.run_due_tasks(ltps, now)
+                app_obj.run_due_comm_tasks()
             # EOD swing scan
             if (SETTINGS.swing_on and past(now, SETTINGS.scan_time)
-                    and app.swing.last_scan != now.date() and not past(now, SETTINGS.hard_stop)):
-                app.swing.last_scan = now.date()
-                app.swing.eod_scan()
+                    and app_obj.swing.last_scan != now.date()
+                    and not past(now, SETTINGS.hard_stop)):
+                app_obj.swing.last_scan = now.date()
+                app_obj.swing.eod_scan()
             # EOD summary
             if past(now, SETTINGS.hard_stop) and not eod_sent:
                 eod_sent = True
-                if SETTINGS.intraday_on and not app.intra.squared_today:
-                    app.intra.squared_today = True
-                    app.alert("⏰ " + app.intra.squareoff_all("HARD STOP"))
-                app.alert(app.cmd_eod())
-            if getattr(app, "comm", None):
+                if SETTINGS.intraday_on and not app_obj.intra.squared_today:
+                    app_obj.intra.squared_today = True
+                    app_obj.alert("\u23f0 " + app_obj.intra.squareoff_all("HARD STOP"))
+                app_obj.alert(app_obj.cmd_eod())
+            if getattr(app_obj, "comm", None):
                 if time.time() - last_guard >= 30:
                     last_guard = time.time()
-                    if app.comm.positions:
-                        app.comm.tick(app.alert)
-                    app.run_due_comm_tasks()
-            hot = bool(app.swing.book.positions) or bool(app.tasks.open_tasks())
+                    if app_obj.comm.positions:
+                        app_obj.comm.tick(app_obj.alert)
+                    app_obj.run_due_comm_tasks()
+            hot = bool(app_obj.swing.book.positions) or bool(app_obj.tasks.open_tasks())
             if hot and in_hours:
-                time.sleep(1)
+                _sleep(1)
             else:
-                time.sleep(SETTINGS.poll_seconds if SETTINGS.intraday_on else 5)
+                _sleep(SETTINGS.poll_seconds if SETTINGS.intraday_on else 5)
         except KeyboardInterrupt:
             log.info("Stopped by user.")
             break
         except Exception as e:
             log.exception("Loop error (keeps running): %s", e)
-            time.sleep(10)
+            _sleep(10)
+    log.info("Trading loop stopped.")
 
-# ==========================================
-# FASTAPI ENDPOINTS & BOT THREADING SETUP
-# ==========================================
-web_app = FastAPI()
 
+def _sleep(seconds: float):
+    """Sleep but wake up early when /stop is pressed."""
+    _bot_stop.wait(timeout=seconds)
+
+
+def start_bot() -> tuple:
+    """Start the bot thread once. Returns (ok, message)."""
+    global _bot, _bot_thread, _bot_error, _bot_started_at
+    with _bot_lock:
+        if _bot_thread and _bot_thread.is_alive():
+            return False, "Bot is already running."
+        _bot_stop.clear()
+        _bot_error = ""
+        try:
+            _bot = App()
+        except Exception as e:
+            _bot_error = f"{type(e).__name__}: {e}"
+            log.exception("App() build failed")
+            return False, f"Bot failed to build: {_bot_error}"
+        _bot_started_at = now_ist()
+        _bot_thread = threading.Thread(target=run_bot_once, args=(_bot,),
+                                       name="trading-bot", daemon=True)
+        _bot_thread.start()
+        return True, "Bot launched - Telegram + trading loop starting."
+
+
+def request_stop(timeout: float = 15.0) -> tuple:
+    """Ask the loop to stop and wait for it. Returns (ok, message)."""
+    global _bot_thread
+    with _bot_lock:
+        th = _bot_thread
+        if not th or not th.is_alive():
+            return False, "Bot is not running."
+        _bot_stop.set()
+    th.join(timeout=timeout)
+    if th.is_alive():
+        return True, "Stop requested - loop finishing its current step."
+    _bot_thread = None
+    return True, "Bot stopped."
+
+
+def main():
+    """Console entry: python main.py (bot in the foreground, Ctrl-C to quit)."""
+    print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
+    ok, msg = start_bot()
+    print(msg)
+    if not ok:
+        return 1
+    try:
+        while _bot_thread and _bot_thread.is_alive():
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Stopping...")
+        request_stop()
+    return 0
+
+
+# ================================================================= web server
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
+INDEX_HTML = os.path.join(FRONTEND_DIR, "index.html")
+
+
+def _truthy(name: str, default: bool = True) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "y")
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    """Start the bot with the web server; stop it on shutdown."""
+    if _truthy("BOT_AUTOSTART", True):
+        ok, msg = start_bot()
+        log.info("autostart: %s", msg)
+    else:
+        log.info("BOT_AUTOSTART=false - press Start on the dashboard (or POST /start)")
+    yield
+    request_stop(timeout=5)
+
+
+web_app = FastAPI(title="AI Auto Trader", version=MAIN_BUILD, lifespan=_lifespan)
 web_app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,     # "*" + credentials is rejected by browsers
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-bot_app = None 
 
-@web_app.get("/")
-def home():
-    return {"message": "AI Auto Trader API is Running"}
+def _tg_status() -> tuple:
+    """(connected, human text). Never claims green next to a dead poller."""
+    if _tg is None:
+        return False, "not started"
+    err = str(getattr(_tg, "error", "") or "")
+    if err:
+        return False, err
+    if not _tg.is_alive():
+        return False, "polling thread exited"
+    return True, "listening"
+
+
+def _uptime_s() -> int:
+    if not _bot_started_at:
+        return 0
+    return int((now_ist() - _bot_started_at).total_seconds())
+
+
+def _positions_snapshot() -> dict:
+    """Flat list for the dashboard. Paper books first, Kotak only if LIVE."""
+    out = {"positions": [], "source": "paper", "error": ""}
+    if _bot is None:
+        out["error"] = "bot not started"
+        return out
+    try:
+        for r in _bot._swing_marks():          # equity swing (paper or live)
+            out["positions"].append({
+                "symbol": str(r["ts"]).replace("-EQ", ""),
+                "trading_symbol": r["ts"],
+                "type": "swing",
+                "qty": r["q"],
+                "buy_price": round(r["entry"], 2),
+                "ltp": round(r["ltp"], 2),
+                "pnl": round(r["pnl"], 2),
+                "pnl_pct": round(r["pct"], 2),
+                "mode": r["p"].get("mode", "paper"),
+            })
+    except Exception as e:
+        out["error"] = f"equity: {e}"
+    try:
+        comm = getattr(_bot, "comm", None)
+        ltps = dict(getattr(comm, "last_prices", {}) or {}) if comm else {}
+        for name, p in (comm.positions.items() if comm else []):
+            qty = float(p.get("qty") or 0)
+            entry = float(p.get("entry") or 0)
+            ltp = float(ltps.get(name) or 0)
+            out["positions"].append({
+                "symbol": name, "trading_symbol": name, "type": "commodity",
+                "qty": qty, "buy_price": entry, "ltp": ltp,
+                "pnl": round((ltp - entry) * qty, 2) if ltp else 0.0,
+                "pnl_pct": round(100.0 * (ltp - entry) / entry, 2) if (ltp and entry) else 0.0,
+                "mode": p.get("mode", "paper"),
+            })
+    except Exception as e:
+        out["error"] = (out["error"] + f" | commodity: {e}").strip(" |")
+    if _bot.live:
+        out["source"] = "kotak+paper"
+        try:
+            resp = _bot.kotak.positions()
+            rows = resp.get("data") if isinstance(resp, dict) else resp
+            out["kotak_raw"] = rows if isinstance(rows, list) else resp
+        except Exception as e:
+            out["error"] = (out["error"] + f" | kotak: {e}").strip(" |")
+    return out
+
+
+# methods include HEAD: Render (and most uptime monitors) probe with HEAD.
+@web_app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+def index():
+    """Dashboard. 200 on / also keeps Render's health check happy."""
+    from fastapi.responses import FileResponse, JSONResponse
+    if os.path.exists(INDEX_HTML):
+        return FileResponse(INDEX_HTML)
+    return JSONResponse({"message": "AI Auto Trader API is running",
+                         "hint": "frontend/index.html missing"})
+
+
+@web_app.api_route("/health", methods=["GET", "HEAD"])
+@web_app.api_route("/api/health", methods=["GET", "HEAD"])
+def health():
+    return {"ok": True, "bot": bot_state(), "uptime_s": _uptime_s()}
+
 
 @web_app.get("/api/status")
 def get_status():
-    return {
-        "status": "online",
-        "paper_trading": getattr(bot_app, "is_paper", True) if bot_app else True
+    s = bot_state()
+    st = {
+        "status": "online" if s == "running" else s,
+        "bot": s,
+        "paper_trading": (not _bot.live) if _bot else True,
+        "mode": SETTINGS.bot_mode,
+        "assistant_mode": bool(_bot is not None and not _bot.universe),
+        "kotak_connected": bool(_bot is not None and _bot.universe),
+        "telegram_connected": _tg_status()[0],
+        "telegram": _tg_status()[1],
+        "uptime_s": _uptime_s(),
+        "build": MAIN_BUILD,
+        "error": _bot_error,
     }
+    return st
+
 
 @web_app.get("/api/positions")
-def get_positions():
-    if bot_app and hasattr(bot_app, "kotak"):
-        try:
-            positions = bot_app.kotak.get_positions()
-            return {"positions": positions}
-        except Exception as e:
-            return {"positions": [], "error": str(e)}
-    return {"positions": []}
+async def get_positions():
+    from fastapi.concurrency import run_in_threadpool
+    try:
+        return await run_in_threadpool(_positions_snapshot)   # LTP fetch is blocking
+    except Exception as e:
+        return {"positions": [], "error": str(e)}
 
-# Bot runner function - Upar bani app class ko use karega
-def run_trading_bot():
-    global bot_app
-    # Yahan app() tabhi call hoga jab main.py poora load ho chuka hoga
-    bot_app = app()
-    bot_app.run()
+
+@web_app.get("/api/tasks")
+def get_tasks():
+    if _bot is None:
+        return {"tasks": [], "error": "bot not started"}
+    try:
+        return {"tasks": _bot.tasks.open_tasks(),
+                "commodity_tasks": _bot.comm_tasks.open_tasks()}
+    except Exception as e:
+        return {"tasks": [], "error": str(e)}
+
+
+@web_app.get("/api/log")
+def get_log(lines: int = 120):
+    """Tail trades.log - handy on Render where the disk is not browsable."""
+    from fastapi.responses import PlainTextResponse
+    try:
+        with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
+            tail = f.readlines()[-max(1, min(int(lines), 2000)):]
+        return PlainTextResponse("".join(tail) or "(log empty)")
+    except FileNotFoundError:
+        return PlainTextResponse("(no trades.log yet)")
+
+
+@web_app.post("/start")
+def start_endpoint():
+    ok, msg = start_bot()
+    return {"ok": ok, "message": msg, "bot": bot_state()}
+
+
+@web_app.post("/stop")
+def stop_endpoint():
+    ok, msg = request_stop()
+    return {"ok": ok, "message": msg, "bot": bot_state()}
+
+
+def serve_web():
+    """One process, one port. Render gives the port in $PORT."""
+    port = int(os.getenv("PORT", "10000"))
+    host = os.getenv("HOST", "0.0.0.0")
+    print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
+    print(f"Web on http://{host}:{port}  |  data dir: {paths.data_dir()}")
+    # workers=1 on purpose: more workers = more bots = duplicate Telegram replies
+    uvicorn.run(web_app, host=host, port=port, workers=1, log_level="info")
+
 
 if __name__ == "__main__":
-    # 1. Trading Bot ko Background Thread me chalayein
-    bot_thread = threading.Thread(target=run_trading_bot, daemon=True)
-    bot_thread.start()
-
-    # 2. FastAPI Web Server ko Render Port par chalayein
-    uvicorn.run(web_app, host="0.0.0.0", port=10000)
-    main()
+    serve_web()

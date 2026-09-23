@@ -15,12 +15,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import moneycontrol
+import paths
 import web_tools
 
 IST = ZoneInfo("Asia/Kolkata")
 
 log = logging.getLogger("commodity")
-POS_FILE = "commodity_positions.json"
+POS_FILE = paths.data_path("commodity_positions.json")
 
 # kind: mcx = try Kotak mcx_fo first; crypto/fx = Yahoo only (not on Neo).
 SPECS = {

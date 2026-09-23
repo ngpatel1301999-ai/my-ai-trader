@@ -148,6 +148,10 @@ class TelegramRemote(threading.Thread):
         self.chat_id = str(chat_id)
         self.app = app
         self.ready = threading.Event()
+        # "" while healthy. Set when polling dies or the token/chat id is missing,
+        # so the dashboard + /api/status can tell the TRUTH instead of showing
+        # a green "connected" next to a dead bot.
+        self.error = ""
 
     def _allowed(self, update) -> bool:
         try:
@@ -179,6 +183,8 @@ class TelegramRemote(threading.Thread):
 
     def run(self):
         if not self.token or "PASTE" in self.token or not self.chat_id:
+            self.error = ("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing in .env "
+                          "(mobile remote OFF)")
             log.warning("Telegram not configured — mobile remote OFF")
             self.ready.set()
             return
@@ -193,6 +199,7 @@ class TelegramRemote(threading.Thread):
             except ImportError:
                 MenuButtonCommands = None
         except Exception as e:
+            self.error = f"python-telegram-bot missing/broken: {e}"
             log.error("telegram lib missing? pip install python-telegram-bot : %s", e)
             self.ready.set()
             return
@@ -357,4 +364,12 @@ class TelegramRemote(threading.Thread):
         try:
             asyncio.run(amain())
         except Exception as e:
+            # Typical cause: bad token -> "Unauthorized", or no outbound network.
+            self.error = f"polling stopped: {e}"
             log.error("telegram polling stopped: %s", e)
+            try:
+                self.app.alert(f"⚠️ Telegram remote died: {e}\n"
+                               "Check TELEGRAM_BOT_TOKEN (and that the host can "
+                               "reach api.telegram.org:443).")
+            except Exception:
+                pass

@@ -5,62 +5,66 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Trader Dashboard</title>
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: #0f172a; 
-            color: #f8fafc; 
-            margin: 0; 
-            padding: 20px; 
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            margin: 0;
+            padding: 20px;
         }
-        .container { 
-            max-width: 900px; 
-            margin: auto; 
+        .container {
+            max-width: 900px;
+            margin: auto;
         }
-        h1 { 
-            color: #38bdf8; 
-            text-align: center; 
+        h1 {
+            color: #38bdf8;
+            text-align: center;
         }
-        .card { 
-            background: #1e293b; 
-            border-radius: 8px; 
-            padding: 20px; 
-            margin-bottom: 20px; 
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); 
+        .card {
+            background: #1e293b;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
         }
-        .status-badge { 
-            display: inline-block; 
-            padding: 6px 12px; 
-            border-radius: 20px; 
-            font-weight: bold; 
-            background: #22c55e; 
-            color: #000; 
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-weight: bold;
+            background: #22c55e;
+            color: #000;
         }
-        .btn { 
-            background: #0284c7; 
-            color: white; 
-            border: none; 
-            padding: 10px 18px; 
-            border-radius: 6px; 
-            cursor: pointer; 
-            font-size: 14px; 
-            font-weight: bold; 
+        .btn {
+            background: #0284c7;
+            color: white;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            margin-right: 8px;
         }
-        .btn:hover { 
-            background: #0369a1; 
+        .btn:hover { background: #0369a1; }
+        .btn.danger { background: #dc2626; }
+        .btn.danger:hover { background: #b91c1c; }
+        .btn.ghost { background: #334155; }
+        .btn.ghost:hover { background: #475569; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
         }
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-top: 15px; 
+        th, td {
+            border-bottom: 1px solid #334155;
+            padding: 12px;
+            text-align: left;
         }
-        th, td { 
-            border-bottom: 1px solid #334155; 
-            padding: 12px; 
-            text-align: left; 
-        }
-        th { 
-            color: #94a3b8; 
-        }
+        th { color: #94a3b8; }
+        .meta { color: #94a3b8; font-size: 13px; line-height: 1.7; }
+        .err { color: #fca5a5; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+        .ok  { color: #86efac; font-size: 13px; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -71,8 +75,17 @@
     <!-- Bot Status Card -->
     <div class="card">
         <h3>Bot Status: <span id="bot-status" class="status-badge">Checking...</span></h3>
-        <p><strong>Mode:</strong> <span id="trading-mode">-</span></p>
+        <p class="meta">
+            <strong>Mode:</strong> <span id="trading-mode">-</span><br>
+            <strong>Kotak:</strong> <span id="kotak-state">-</span> &nbsp;|&nbsp;
+            <strong>Telegram:</strong> <span id="tg-state">-</span><br>
+            <strong>Uptime:</strong> <span id="uptime">-</span> &nbsp;|&nbsp;
+            <strong>Build:</strong> <span id="build">-</span>
+        </p>
         <button class="btn" onclick="fetchStatus()">Refresh Status</button>
+        <button class="btn" onclick="startBot()">▶ Start Bot</button>
+        <button class="btn danger" onclick="stopBot()">■ Stop Bot</button>
+        <div id="msg"></div>
     </div>
 
     <!-- Positions Card -->
@@ -83,37 +96,60 @@
             <thead>
                 <tr>
                     <th>Symbol</th>
+                    <th>Type</th>
                     <th>Qty</th>
                     <th>Buy Price</th>
                     <th>LTP</th>
-                    <th>P&L</th>
+                    <th>P&amp;L</th>
                 </tr>
             </thead>
             <tbody id="positions-list">
-                <tr><td colspan="5" style="text-align:center;">Click fetch to load data</td></tr>
+                <tr><td colspan="6" style="text-align:center;">Click fetch to load data</td></tr>
             </tbody>
         </table>
     </div>
 </div>
 
 <script>
-    // Updated Live Render Backend URL
-    const BACKEND_URL = "https://my-ai-trader-dlxq.onrender.com"; 
+    // SAME ORIGIN — the dashboard is served by the very server that runs the bot,
+    // so relative URLs work on Render, Railway, a VPS and localhost. No CORS,
+    // and no hard-coded URL that breaks when the service is renamed.
+    const BACKEND_URL = "";
+
+    function show(text, good) {
+        const el = document.getElementById('msg');
+        el.className = good ? 'ok' : 'err';
+        el.innerText = text || '';
+    }
+
+    function fmtUptime(s) {
+        if (!s) return '-';
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+    }
 
     async function fetchStatus() {
         const badge = document.getElementById('bot-status');
         try {
             const res = await fetch(`${BACKEND_URL}/api/status`);
-            const data = await res.json();
-            badge.innerText = data.status ? data.status.toUpperCase() : "ONLINE";
-            badge.style.background = "#22c55e";
-            badge.style.color = "#000";
-            document.getElementById('trading-mode').innerText = data.paper_trading ? "Paper Trading" : "LIVE Trading";
+            const d = await res.json();
+            const running = d.bot === 'running';
+            badge.innerText = (d.status || 'unknown').toUpperCase();
+            badge.style.background = running ? '#22c55e' : (d.bot === 'crashed' ? '#ef4444' : '#f59e0b');
+            badge.style.color = running ? '#000' : '#fff';
+            document.getElementById('trading-mode').innerText =
+                `${d.paper_trading ? '🟢 Paper' : '🔴 LIVE'} · ${d.mode || '-'}`;
+            document.getElementById('kotak-state').innerText =
+                d.kotak_connected ? 'connected' : (d.assistant_mode ? 'assistant mode (not connected)' : '-');
+            document.getElementById('tg-state').innerText = d.telegram_connected ? 'listening ✅' : (d.telegram || 'offline ❌');
+            document.getElementById('uptime').innerText = fmtUptime(d.uptime_s);
+            document.getElementById('build').innerText = d.build || '-';
+            show(d.error ? `Last error: ${d.error}` : '', false);
         } catch (err) {
-            badge.innerText = "DISCONNECTED";
-            badge.style.background = "#ef4444";
-            badge.style.color = "#fff";
-            console.error("Error fetching status:", err);
+            badge.innerText = 'DISCONNECTED';
+            badge.style.background = '#ef4444';
+            badge.style.color = '#fff';
+            console.error('status fetch failed', err);
         }
     }
 
@@ -122,31 +158,52 @@
         try {
             const res = await fetch(`${BACKEND_URL}/api/positions`);
             const data = await res.json();
-            tbody.innerHTML = "";
-
+            tbody.innerHTML = '';
             if (!data.positions || data.positions.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No active positions</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No active positions</td></tr>`;
+                if (data.error) show(data.error, false);
                 return;
             }
-
             data.positions.forEach(pos => {
-                const row = `<tr>
+                const pnl = Number(pos.pnl || 0);
+                tbody.innerHTML += `<tr>
                     <td>${pos.symbol}</td>
+                    <td>${pos.type || ''}</td>
                     <td>${pos.qty}</td>
-                    <td>₹${pos.buy_price}</td>
-                    <td>₹${pos.ltp}</td>
-                    <td style="color: ${pos.pnl >= 0 ? '#22c55e' : '#ef4444'}">₹${pos.pnl}</td>
+                    <td>${pos.buy_price}</td>
+                    <td>${pos.ltp || '?'}</td>
+                    <td style="color: ${pnl >= 0 ? '#22c55e' : '#ef4444'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</td>
                 </tr>`;
-                tbody.innerHTML += row;
             });
+            show(data.error ? data.error : '', false);
         } catch (err) {
-            alert("Positions load nahi ho payi. Backend connection check karein!");
-            console.error("Error fetching positions:", err);
+            show('Positions load nahi ho payi — backend connection check karein.', false);
+            console.error('positions fetch failed', err);
         }
     }
 
-    // Load status automatically on open
-    window.onload = fetchStatus;
+    async function startBot() {
+        show('Starting...', true);
+        try {
+            const res = await fetch(`${BACKEND_URL}/start`, { method: 'POST' });
+            const d = await res.json();
+            show(d.message || 'done', !!d.ok);
+            setTimeout(fetchStatus, 1500);
+        } catch (err) { show('Start failed: ' + err, false); }
+    }
+
+    async function stopBot() {
+        if (!confirm('Bot stop karein? Telegram commands band ho jayenge.')) return;
+        show('Stopping...', true);
+        try {
+            const res = await fetch(`${BACKEND_URL}/stop`, { method: 'POST' });
+            const d = await res.json();
+            show(d.message || 'done', !!d.ok);
+            setTimeout(fetchStatus, 1500);
+        } catch (err) { show('Stop failed: ' + err, false); }
+    }
+
+    window.onload = () => { fetchStatus(); fetchPositions(); setInterval(fetchStatus, 20000); };
 </script>
 
 </body>

@@ -10,6 +10,8 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+import paths
+
 log = logging.getLogger("tasks")
 
 
@@ -33,7 +35,10 @@ TASKS_FILE = "tasks.json"
 
 class TaskEngine:
     def __init__(self, path: str = TASKS_FILE):
-        self.path = path or TASKS_FILE
+        # a bare file name ("tasks.json") goes to the state dir; an absolute
+        # path is used as-is. Keeps old callers working.
+        p = path or TASKS_FILE
+        self.path = p if os.path.isabs(p) else paths.data_path(p)
         self.tasks = []
         self._next_id = 1
         self.load()

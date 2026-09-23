@@ -1,8 +1,22 @@
-kotakneoapi
-python-telegram-bot>=21,<23
-pyotp
-python-dotenv
-pandas
-fastapi
-uvicorn
-flask
+# Pinned on purpose: an unpinned build on a fresh Render deploy can resolve a
+# brand-new release that has no wheel for your Python and the build explodes.
+# Python: see .python-version (3.12) / PYTHON_VERSION env var on Render.
+
+# --- Kotak Neo official SDK (imports as neo_api_client) ---
+kotakneoapi>=3.0.5,<4
+
+# --- Telegram remote (v21/v22 = the async API telegram_remote.py uses) ---
+python-telegram-bot>=21.6,<23
+
+# --- web: dashboard + JSON API + Render's port ---
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+
+# --- support ---
+pyotp>=2.9,<3
+python-dotenv>=1.0,<2
+pandas>=2.2,<3
+tzdata>=2024.1        # ZoneInfo("Asia/Kolkata") on hosts without a system tz database
+
+# flask is NOT needed any more: app.py is now a thin wrapper around FastAPI.
+# (left out on purpose — one server, one port, one bot.)

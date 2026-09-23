@@ -20,6 +20,8 @@ import pyotp
 import web_tools
 from neo_api_client import NeoAPI
 
+import paths
+
 BUILD = "2026-09-17d"  # doctor + main print this; mismatch = mixed files
 
 log = logging.getLogger("kotak")
@@ -39,7 +41,7 @@ NSE_TOKENS = {
     "ITC": ("ITC-EQ", "1660"),
     "TITAN": ("TITAN-EQ", "3506"),
 }
-VERIFIED_FILE = "tokens_verified.json"
+VERIFIED_FILE = paths.data_path("tokens_verified.json")
 FALLBACK_TTL = 30  # seconds: reuse delayed-feed prices within this window
 
 

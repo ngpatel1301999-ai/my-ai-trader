@@ -1,0 +1,1435 @@
+diff --git a/.gitignore b/.gitignore
+index bb00177..d924c9e 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -6,3 +6,8 @@ sample_*.csv
+ memory.json
+ user_profile.json
+ brief_*.md
++
++# deploy noise
++logs/
++trades.log
++supervise.log
+diff --git a/.python-version b/.python-version
+new file mode 100644
+index 0000000..e4fba21
+--- /dev/null
++++ b/.python-version
+@@ -0,0 +1 @@
++3.12
+diff --git a/kotak-auto-trader/.gitignore b/kotak-auto-trader/.gitignore
+index bb00177..d924c9e 100644
+--- a/kotak-auto-trader/.gitignore
++++ b/kotak-auto-trader/.gitignore
+@@ -6,3 +6,8 @@ sample_*.csv
+ memory.json
+ user_profile.json
+ brief_*.md
++
++# deploy noise
++logs/
++trades.log
++supervise.log
+diff --git a/kotak-auto-trader/README.md b/kotak-auto-trader/README.md
+index 197a783..a10c27b 100644
+--- a/kotak-auto-trader/README.md
++++ b/kotak-auto-trader/README.md
+@@ -28,7 +28,10 @@ No TradingView needed. Phone (Telegram) is the remote.
+ 
+ | File | Work |
+ |---|---|
+-| `main.py` | App brain + scheduler. Run this. |
++| `main.py` | App brain + scheduler **+ FastAPI dashboard**. Run this. |
++| `app.py` | 3-line wrapper so `uvicorn app:app` / `python app.py` also work |
++| `paths.py` | Where state files live (`DATA_DIR` = mounted disk on Render) |
++| `frontend/index.html` | Dashboard served at `/` (start/stop, status, positions) |
+ | `swing.py` | Swing score + position book + journal |
+ | `ai_agent.py` | Gemini chat → actions (stdlib only, no install) |
+ | `tasks.py` | Pending auto-tasks |
+@@ -64,6 +67,55 @@ python backtest_swing.py --csv swing_sample.csv     # plumbing test
+ python main.py              # PAPER swing + AI. Nothing real happens.
+ ```
+ 
++## SETUP — Step 4b: Deploy on Render (cloud, 24×7) ☁️
++
++One process serves **both**: the Telegram/trading bot (daemon thread) and the
++web dashboard (FastAPI). Render needs a port, so the web server is the front
++door and the bot auto-starts with it.
++
++**Render dashboard → your service → Settings**
++
++| Setting | Value |
++|---|---|
++| Root Directory | `kotak-auto-trader` |
++| Runtime | Python |
++| Build Command | `pip install -r requirements.txt` |
++| Start Command | `python main.py` |
++| Health Check Path | `/health` |
++
++**Environment → add** (these are the ones that fixed the broken deploy):
++
++```
++PYTHON_VERSION = 3.12.8      # Render defaults to 3.14.3 = too new for pandas/pydantic wheels
++DATA_DIR       = /var/data   # only if you attach a Disk (see below)
++BOT_AUTOSTART  = true        # false = bot waits for you to press Start on the dashboard
++```
++Plus your secrets: `NEO_CONSUMER_KEY`, `NEO_MOBILE_NUMBER`, `NEO_UCC`, `NEO_MPIN`,
++`NEO_TOTP_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GEMINI_API_KEY`,
++`BOT_MODE=swing`, `TRADING_MODE=paper`, `ENABLE_LIVE_ORDERS=false`.
++
++**Then:** Disks → Add disk → Mount path `/var/data`, 1 GB.
++Without a disk, `tasks.json` / `swing_positions.json` / `swing_trades.csv` are
++**wiped on every deploy** (Render's disk is ephemeral).
++
++**Check it worked**
++
++1. Logs show `Uvicorn running on http://0.0.0.0:10000` **and** `Telegram remote is live`
++2. Open your service URL → dashboard. Status should read `RUNNING`.
++3. `https://YOUR-SERVICE.onrender.com/api/log?lines=50` → tail of `trades.log`
++4. Telegram: send `/status`
++
++**⚠️ Two Render gotchas for a trading bot**
++
++- **Kotak IP whitelist:** Render's outbound IP changes on redeploy, so
++  `script-details/*` (token search) will reject you. The bot survives this —
++  it uses the built-in token map + `historical-data` and starts in
++  **ASSISTANT MODE** (chat/research/tasks work, Kotak retried every 5 min).
++  For real trading use an Indian VPS with a static IP (Step 5).
++- **Free plan sleeps** after ~15 min with no HTTP traffic → Telegram polling
++  stops. Use a paid instance (or an uptime pinger on `/health`) if you need it
++  always listening.
++
+ ## SETUP — Step 5: Go LIVE (only after 1 profitable paper month)
+ 
+ 1. Indian VPS + static IP (~₹500–1,000/month), whitelist IP in Kotak dashboard
+@@ -135,10 +187,20 @@ Your bot now answers like a top AI assistant:
+ 
+ ## Troubleshooting
+ 
++- **`TypeError: Flask.__call__() missing 2 required positional arguments`** →
++  you are on the old `main.py`. It did `from app import app` (the Flask object)
++  and then called `app()` instead of `App()`. Fixed: `app.py` is now a wrapper,
++  `main.py` has no Flask at all. Pull the latest.
++- **`GET /` returns 404 on Render** → the old first FastAPI app had no `/`
++  route. Now `/` serves the dashboard and accepts HEAD (Render's probe).
++- **Bot thread dies but the service stays "live"** → check `/api/status` →
++  `bot` must be `running`; `error` and `telegram` fields tell you why not.
+ - TOTP wrong → phone clock must be exact (automatic time ON)
+-- "IP not whitelisted" → IP changed; update in Kotak dashboard
++- "IP not whitelisted" → IP changed; update in Kotak dashboard (Render IPs rotate —
++  use a VPS for live)
+ - AI dumb replies → check GEMINI_API_KEY; free quota resets daily
+ - Order rejected → low margin / BE-category stock / market closed → check Neo app + trades.log
+ - Swing sell fails → BTST/T2T limits; stick to liquid largecaps
++- Tasks/positions vanished after a deploy → set `DATA_DIR=/var/data` and attach a Disk
+ 
+ ⚠️ Educational code. You are responsible for your orders. Start tiny.
+diff --git a/kotak-auto-trader/app.py b/kotak-auto-trader/app.py
+index dcbc2ad..4ce3754 100644
+--- a/kotak-auto-trader/app.py
++++ b/kotak-auto-trader/app.py
+@@ -1,35 +1,26 @@
+-import subprocess
+-import sys
+-from flask import Flask, render_template, jsonify
++"""THIN WRAPPER — the real web app + bot live in main.py.
+ 
+-app = Flask(__name__)
++This file only exists so these keep working:
++    python app.py
++    uvicorn app:app --host 0.0.0.0 --port $PORT
+ 
+-# Process track karne ke liye global variable
+-bot_process = None
++⚠️ The OLD app.py was a Flask server that launched `python main.py` with
++subprocess. On Render that is the wrong shape:
++  * `from app import app` in main.py imported the FLASK OBJECT, so `app()`
++    raised  TypeError: Flask.__call__() missing 2 required positional
++    arguments: 'environ' and 'start_response'   <- the crash you saw.
++  * the name `app` was shadowing the bot's `App` class.
++  * spawning a second python process on a host that can kill/scale it means
++    two bots, two Telegram pollers and duplicated replies.
+ 
+-@app.route("/")
+-def home():
+-    # Frontend HTML load hoga
+-    return render_template("index.html")
++So: ONE process now. FastAPI serves the dashboard + API, and the trading bot
++runs in a daemon thread inside it (see main.py -> start_bot / run_bot_once).
++"""
++from main import web_app as app      # FastAPI instance ("app" = what uvicorn wants)
++from main import serve_web, start_bot, request_stop, bot_state  # noqa: F401
+ 
+-@app.route("/start", methods=["POST"])
+-def start_bot():
+-    global bot_process
+-    # Agar bot pehle se nahi chal raha hai tabhi start karega
+-    if bot_process is None or bot_process.poll() is not None:
+-        bot_process = subprocess.Popen([sys.executable, "main.py"])
+-        return jsonify({"message": "Bot launched and connected successfully!"}), 200
+-    return jsonify({"message": "Bot is already running!"}), 400
++__all__ = ["app", "serve_web", "start_bot", "request_stop", "bot_state"]
+ 
+-@app.route("/stop", methods=["POST"])
+-def stop_bot():
+-    global bot_process
+-    # Agar bot chal raha hai toh use stop karega
+-    if bot_process and bot_process.poll() is None:
+-        bot_process.terminate()
+-        bot_process = None
+-        return jsonify({"message": "Bot disconnected successfully!"}), 200
+-    return jsonify({"message": "Bot is not running!"}), 400
+ 
+ if __name__ == "__main__":
+-    app.run(host="0.0.0.0", port=5000)
+\ No newline at end of file
++    serve_web()
+diff --git a/kotak-auto-trader/commodity.py b/kotak-auto-trader/commodity.py
+index 93d42d2..e6cc154 100644
+--- a/kotak-auto-trader/commodity.py
++++ b/kotak-auto-trader/commodity.py
+@@ -15,12 +15,13 @@ from datetime import datetime
+ from zoneinfo import ZoneInfo
+ 
+ import moneycontrol
++import paths
+ import web_tools
+ 
+ IST = ZoneInfo("Asia/Kolkata")
+ 
+ log = logging.getLogger("commodity")
+-POS_FILE = "commodity_positions.json"
++POS_FILE = paths.data_path("commodity_positions.json")
+ 
+ # kind: mcx = try Kotak mcx_fo first; crypto/fx = Yahoo only (not on Neo).
+ SPECS = {
+diff --git a/kotak-auto-trader/frontend/index.html b/kotak-auto-trader/frontend/index.html
+index 73c3b7f..c4df9a1 100644
+--- a/kotak-auto-trader/frontend/index.html
++++ b/kotak-auto-trader/frontend/index.html
+@@ -5,62 +5,66 @@
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+     <title>AI Trader Dashboard</title>
+     <style>
+-        body { 
+-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+-            background: #0f172a; 
+-            color: #f8fafc; 
+-            margin: 0; 
+-            padding: 20px; 
++        body {
++            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
++            background: #0f172a;
++            color: #f8fafc;
++            margin: 0;
++            padding: 20px;
+         }
+-        .container { 
+-            max-width: 900px; 
+-            margin: auto; 
++        .container {
++            max-width: 900px;
++            margin: auto;
+         }
+-        h1 { 
+-            color: #38bdf8; 
+-            text-align: center; 
++        h1 {
++            color: #38bdf8;
++            text-align: center;
+         }
+-        .card { 
+-            background: #1e293b; 
+-            border-radius: 8px; 
+-            padding: 20px; 
+-            margin-bottom: 20px; 
+-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); 
++        .card {
++            background: #1e293b;
++            border-radius: 8px;
++            padding: 20px;
++            margin-bottom: 20px;
++            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+         }
+-        .status-badge { 
+-            display: inline-block; 
+-            padding: 6px 12px; 
+-            border-radius: 20px; 
+-            font-weight: bold; 
+-            background: #22c55e; 
+-            color: #000; 
++        .status-badge {
++            display: inline-block;
++            padding: 6px 12px;
++            border-radius: 20px;
++            font-weight: bold;
++            background: #22c55e;
++            color: #000;
+         }
+-        .btn { 
+-            background: #0284c7; 
+-            color: white; 
+-            border: none; 
+-            padding: 10px 18px; 
+-            border-radius: 6px; 
+-            cursor: pointer; 
+-            font-size: 14px; 
+-            font-weight: bold; 
++        .btn {
++            background: #0284c7;
++            color: white;
++            border: none;
++            padding: 10px 18px;
++            border-radius: 6px;
++            cursor: pointer;
++            font-size: 14px;
++            font-weight: bold;
++            margin-right: 8px;
+         }
+-        .btn:hover { 
+-            background: #0369a1; 
++        .btn:hover { background: #0369a1; }
++        .btn.danger { background: #dc2626; }
++        .btn.danger:hover { background: #b91c1c; }
++        .btn.ghost { background: #334155; }
++        .btn.ghost:hover { background: #475569; }
++        table {
++            width: 100%;
++            border-collapse: collapse;
++            margin-top: 15px;
+         }
+-        table { 
+-            width: 100%; 
+-            border-collapse: collapse; 
+-            margin-top: 15px; 
+-        }
+-        th, td { 
+-            border-bottom: 1px solid #334155; 
+-            padding: 12px; 
+-            text-align: left; 
+-        }
+-        th { 
+-            color: #94a3b8; 
++        th, td {
++            border-bottom: 1px solid #334155;
++            padding: 12px;
++            text-align: left;
+         }
++        th { color: #94a3b8; }
++        .meta { color: #94a3b8; font-size: 13px; line-height: 1.7; }
++        .err { color: #fca5a5; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
++        .ok  { color: #86efac; font-size: 13px; margin-top: 10px; }
+     </style>
+ </head>
+ <body>
+@@ -71,8 +75,17 @@
+     <!-- Bot Status Card -->
+     <div class="card">
+         <h3>Bot Status: <span id="bot-status" class="status-badge">Checking...</span></h3>
+-        <p><strong>Mode:</strong> <span id="trading-mode">-</span></p>
++        <p class="meta">
++            <strong>Mode:</strong> <span id="trading-mode">-</span><br>
++            <strong>Kotak:</strong> <span id="kotak-state">-</span> &nbsp;|&nbsp;
++            <strong>Telegram:</strong> <span id="tg-state">-</span><br>
++            <strong>Uptime:</strong> <span id="uptime">-</span> &nbsp;|&nbsp;
++            <strong>Build:</strong> <span id="build">-</span>
++        </p>
+         <button class="btn" onclick="fetchStatus()">Refresh Status</button>
++        <button class="btn" onclick="startBot()">▶ Start Bot</button>
++        <button class="btn danger" onclick="stopBot()">■ Stop Bot</button>
++        <div id="msg"></div>
+     </div>
+ 
+     <!-- Positions Card -->
+@@ -83,37 +96,60 @@
+             <thead>
+                 <tr>
+                     <th>Symbol</th>
++                    <th>Type</th>
+                     <th>Qty</th>
+                     <th>Buy Price</th>
+                     <th>LTP</th>
+-                    <th>P&L</th>
++                    <th>P&amp;L</th>
+                 </tr>
+             </thead>
+             <tbody id="positions-list">
+-                <tr><td colspan="5" style="text-align:center;">Click fetch to load data</td></tr>
++                <tr><td colspan="6" style="text-align:center;">Click fetch to load data</td></tr>
+             </tbody>
+         </table>
+     </div>
+ </div>
+ 
+ <script>
+-    // Updated Live Render Backend URL
+-    const BACKEND_URL = "https://my-ai-trader-dlxq.onrender.com"; 
++    // SAME ORIGIN — the dashboard is served by the very server that runs the bot,
++    // so relative URLs work on Render, Railway, a VPS and localhost. No CORS,
++    // and no hard-coded URL that breaks when the service is renamed.
++    const BACKEND_URL = "";
++
++    function show(text, good) {
++        const el = document.getElementById('msg');
++        el.className = good ? 'ok' : 'err';
++        el.innerText = text || '';
++    }
++
++    function fmtUptime(s) {
++        if (!s) return '-';
++        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
++        return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
++    }
+ 
+     async function fetchStatus() {
+         const badge = document.getElementById('bot-status');
+         try {
+             const res = await fetch(`${BACKEND_URL}/api/status`);
+-            const data = await res.json();
+-            badge.innerText = data.status ? data.status.toUpperCase() : "ONLINE";
+-            badge.style.background = "#22c55e";
+-            badge.style.color = "#000";
+-            document.getElementById('trading-mode').innerText = data.paper_trading ? "Paper Trading" : "LIVE Trading";
++            const d = await res.json();
++            const running = d.bot === 'running';
++            badge.innerText = (d.status || 'unknown').toUpperCase();
++            badge.style.background = running ? '#22c55e' : (d.bot === 'crashed' ? '#ef4444' : '#f59e0b');
++            badge.style.color = running ? '#000' : '#fff';
++            document.getElementById('trading-mode').innerText =
++                `${d.paper_trading ? '🟢 Paper' : '🔴 LIVE'} · ${d.mode || '-'}`;
++            document.getElementById('kotak-state').innerText =
++                d.kotak_connected ? 'connected' : (d.assistant_mode ? 'assistant mode (not connected)' : '-');
++            document.getElementById('tg-state').innerText = d.telegram_connected ? 'listening ✅' : (d.telegram || 'offline ❌');
++            document.getElementById('uptime').innerText = fmtUptime(d.uptime_s);
++            document.getElementById('build').innerText = d.build || '-';
++            show(d.error ? `Last error: ${d.error}` : '', false);
+         } catch (err) {
+-            badge.innerText = "DISCONNECTED";
+-            badge.style.background = "#ef4444";
+-            badge.style.color = "#fff";
+-            console.error("Error fetching status:", err);
++            badge.innerText = 'DISCONNECTED';
++            badge.style.background = '#ef4444';
++            badge.style.color = '#fff';
++            console.error('status fetch failed', err);
+         }
+     }
+ 
+@@ -122,32 +158,53 @@
+         try {
+             const res = await fetch(`${BACKEND_URL}/api/positions`);
+             const data = await res.json();
+-            tbody.innerHTML = "";
+-
++            tbody.innerHTML = '';
+             if (!data.positions || data.positions.length === 0) {
+-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;">No active positions</td></tr>`;
++                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;">No active positions</td></tr>`;
++                if (data.error) show(data.error, false);
+                 return;
+             }
+-
+             data.positions.forEach(pos => {
+-                const row = `<tr>
++                const pnl = Number(pos.pnl || 0);
++                tbody.innerHTML += `<tr>
+                     <td>${pos.symbol}</td>
++                    <td>${pos.type || ''}</td>
+                     <td>${pos.qty}</td>
+-                    <td>₹${pos.buy_price}</td>
+-                    <td>₹${pos.ltp}</td>
+-                    <td style="color: ${pos.pnl >= 0 ? '#22c55e' : '#ef4444'}">₹${pos.pnl}</td>
++                    <td>${pos.buy_price}</td>
++                    <td>${pos.ltp || '?'}</td>
++                    <td style="color: ${pnl >= 0 ? '#22c55e' : '#ef4444'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</td>
+                 </tr>`;
+-                tbody.innerHTML += row;
+             });
++            show(data.error ? data.error : '', false);
+         } catch (err) {
+-            alert("Positions load nahi ho payi. Backend connection check karein!");
+-            console.error("Error fetching positions:", err);
++            show('Positions load nahi ho payi — backend connection check karein.', false);
++            console.error('positions fetch failed', err);
+         }
+     }
+ 
+-    // Load status automatically on open
+-    window.onload = fetchStatus;
++    async function startBot() {
++        show('Starting...', true);
++        try {
++            const res = await fetch(`${BACKEND_URL}/start`, { method: 'POST' });
++            const d = await res.json();
++            show(d.message || 'done', !!d.ok);
++            setTimeout(fetchStatus, 1500);
++        } catch (err) { show('Start failed: ' + err, false); }
++    }
++
++    async function stopBot() {
++        if (!confirm('Bot stop karein? Telegram commands band ho jayenge.')) return;
++        show('Stopping...', true);
++        try {
++            const res = await fetch(`${BACKEND_URL}/stop`, { method: 'POST' });
++            const d = await res.json();
++            show(d.message || 'done', !!d.ok);
++            setTimeout(fetchStatus, 1500);
++        } catch (err) { show('Stop failed: ' + err, false); }
++    }
++
++    window.onload = () => { fetchStatus(); fetchPositions(); setInterval(fetchStatus, 20000); };
+ </script>
+ 
+ </body>
+-</html>
+\ No newline at end of file
++</html>
+diff --git a/kotak-auto-trader/kotak_client.py b/kotak-auto-trader/kotak_client.py
+index 5b9216a..7e104c8 100644
+--- a/kotak-auto-trader/kotak_client.py
++++ b/kotak-auto-trader/kotak_client.py
+@@ -20,6 +20,8 @@ import pyotp
+ import web_tools
+ from neo_api_client import NeoAPI
+ 
++import paths
++
+ BUILD = "2026-09-17d"  # doctor + main print this; mismatch = mixed files
+ 
+ log = logging.getLogger("kotak")
+@@ -39,7 +41,7 @@ NSE_TOKENS = {
+     "ITC": ("ITC-EQ", "1660"),
+     "TITAN": ("TITAN-EQ", "3506"),
+ }
+-VERIFIED_FILE = "tokens_verified.json"
++VERIFIED_FILE = paths.data_path("tokens_verified.json")
+ FALLBACK_TTL = 30  # seconds: reuse delayed-feed prices within this window
+ 
+ 
+diff --git a/kotak-auto-trader/main.py b/kotak-auto-trader/main.py
+index 8ce7c50..e4ec5da 100644
+--- a/kotak-auto-trader/main.py
++++ b/kotak-auto-trader/main.py
+@@ -1,76 +1,42 @@
+-"""MAIN FILE. Run:  python main.py
++"""MAIN FILE — Telegram bot + trading loop + web dashboard in ONE process.
++
++Run locally:   python main.py
++Run on Render: python main.py            (Start Command)
++   or better:  uvicorn main:web_app --host 0.0.0.0 --port $PORT --workers 1
++
+ BOT_MODE=swing (default) | intraday | both.  Default = PAPER (fake money).
+ AI chat + tasks + approvals all flow through the App class below.
+ No Kotak yet? Bot starts in ASSISTANT MODE (chat/research/tasks work,
+ trading waits + auto-reconnects). Tip: run with ./supervise.sh.
++
++WEB: "/" serves frontend/index.html, "/health" is for Render,
++"/api/status" + "/api/positions" feed the dashboard, "/start" + "/stop"
++control the bot thread. The bot auto-starts with the web server
++(BOT_AUTOSTART=false to disable).
+ """
+ import difflib
++import os
+ import logging
+ import sys
++import threading
+ import time
++from contextlib import asynccontextmanager
+ from datetime import datetime
+ from zoneinfo import ZoneInfo
+-from app import app
+-
+-import threading
+-import uvicorn
+-from fastapi import FastAPI
+-from fastapi.middleware.cors import CORSMiddleware
+-
+-# FastAPI instance
+-web_app = FastAPI()
+-
+-# HTML file ko access allow karne ke liye (CORS)
+-web_app.add_middleware(
+-    CORSMiddleware,
+-    allow_origins=["*"],
+-    allow_credentials=True,
+-    allow_methods=["*"],
+-    allow_headers=["*"],
+-)
+ 
+-# Global app variable (jahan aapka trading logic hai)
+-bot_app = None 
+-
+-@web_app.get("/api/status")
+-def get_status():
+-    return {
+-        "status": "online",
+-        "paper_trading": getattr(bot_app, "is_paper", True)
+-    }
+-
+-@web_app.get("/api/positions")
+-def get_positions():
+-    # Kotak API ya paper book se positions return karein
+-    if bot_app and hasattr(bot_app, "kotak"):
+-        try:
+-            positions = bot_app.kotak.get_positions()
+-            return {"positions": positions}
+-        except Exception as e:
+-            return {"positions": [], "error": str(e)}
+-    return {"positions": []}
+-
+-def run_trading_bot():
+-    global bot_app
+-    bot_app = app()
+-    bot_app.run() # Aapka main loop
+-
+-if __name__ == "__main__":
+-    # 1. Trading Bot ko Background Thread me chalayein
+-    bot_thread = threading.Thread(target=run_trading_bot, daemon=True)
+-    bot_thread.start()
+-
+-    # 2. Web API Server ko Main Thread me chalayein
+-    uvicorn.run(web_app, host="0.0.0.0", port=10000)
+-
+-# Windows console (cp1252) cannot print emoji -> force UTF-8 so logs never crash
+ try:
+     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+ except Exception:
+     pass
+ 
++
++import uvicorn
++from fastapi import FastAPI
++from fastapi.middleware.cors import CORSMiddleware
++
+ from config import SETTINGS
++import paths
+ from kotak_client import KotakClient, BUILD as KC_BUILD
+ try:
+     from build_stamp import BUILD as MAIN_BUILD
+@@ -101,11 +67,16 @@ COMMON_SYMBOLS = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "TMPV", "TMCV", "SBIN",
+                   "ICICIBANK", "LT", "AXISBANK", "KOTAKBANK", "ITC", "HINDUNILVR",
+                   "BHARTIARTL", "MARUTI", "TITAN", "SUNPHARMA", "NTPC", "ONGC"]
+ 
++LOG_FILE = os.path.join(paths.data_dir(), "trades.log")
++_handlers = [logging.StreamHandler()]
++try:                      # a read-only disk must never stop the bot
++    _handlers.insert(0, logging.FileHandler(LOG_FILE, encoding="utf-8"))
++except Exception:
++    pass
+ logging.basicConfig(
+     level=logging.INFO,
+     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+-    handlers=[logging.FileHandler("trades.log", encoding="utf-8"),
+-              logging.StreamHandler()],
++    handlers=_handlers,
+ )
+ log = logging.getLogger("main")
+ 
+@@ -1548,195 +1519,435 @@ class IntradayEngine:
+         return f"Intraday PAPER closed. P&L {total:+.2f}."
+ 
+ 
+-# ================================================================= main loop
+-def main():
+-    print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
+-    problems = SETTINGS.validate()
+-    if problems:
+-        print("❌ Fix .env first:")
+-        for p in problems:
+-            print("  -", p)
+-        return
+-    for w in SETTINGS.warnings():
+-        print("⚠️", w)
+-
+-    app = App()
+-    app.resolve_universe()
+-    if app.universe:
+-        log.info("Universe: %s", [u["trading"] for u in app.universe])
+-        start_note = f"Watch: {', '.join(u['symbol'] for u in app.universe)}"
+-    else:
+-        print("⚠️ Kotak NOT connected — starting in ASSISTANT MODE.")
+-        print("   Chat/research/tasks work. Trading waits + auto-retries every 5 min.")
+-        print("   Fix: correct NEO_CONSUMER_KEY in .env, then restart (or wait for auto-retry).")
+-        start_note = ("🔌 Assistant mode: Kotak not connected yet.\n"
+-                      "Chat/research/tasks work. Trading unlocks when key is fixed.")
+-    tg = TelegramRemote(SETTINGS.tg_token, SETTINGS.tg_chat_id, app)
+-    tg.start()
+-    ready = getattr(tg, "ready", None)
+-    if ready is None:
+-        log.warning("telegram_remote.py is OLD (no ready). Copy telegram_remote.py from the zip.")
+-        time.sleep(3)
+-    elif not ready.wait(timeout=25):
+-        log.warning("Telegram polling slow to start — messages in the next few seconds may be missed")
+-    paper = "🟢 PAPER (fake money — no live orders)"
+-    mismatch = ""
+-    if MAIN_BUILD != AGENT_BUILD:
+-        mismatch = (f"⚠️ COPY MISMATCH: main={MAIN_BUILD} agent={AGENT_BUILD}. "
+-                    "Overwrite ALL .py from the zip (including build_stamp.py).\n")
+-    app.alert(f"🤖 Bot started: {SETTINGS.bot_mode.upper()} {paper}\n"
+-              f"{mismatch}{start_note}\nBUILD {MAIN_BUILD}  agent={AGENT_BUILD}\n"
+-              f"Ask anything — I answer THAT question, not a generic news dump.\n"
+-              f"Type / for commands. Telegram is listening now.")
+-
++# ================================================================= bot runner
++# The bot is ONE object shared by Telegram, the trading loop and the web API.
++# It runs in a daemon thread so the web server (main thread) keeps answering
++# Render's health checks even while the bot is scanning / trading.
++_bot = None                     # App instance (None until started)
++_bot_thread = None              # threading.Thread running run_bot_once()
++_bot_lock = threading.Lock()    # guards start/stop from the web endpoints
++_bot_stop = threading.Event()   # set -> loop exits cleanly
++_bot_error = ""                 # last crash reason (shown on the dashboard)
++_bot_started_at = None          # datetime the bot was started
++_tg = None                      # TelegramRemote thread
++
++
++def bot_state() -> str:
++    if _bot_thread and _bot_thread.is_alive():
++        return "running"
++    if _bot_error:
++        return "crashed"
++    if _bot is not None:
++        return "stopped"
++    return "not_started"
++
++
++def run_bot_once(app_obj: "App"):
++    """Build Telegram remote + run the trading loop until stopped.
++
++    Missing Kotak keys do NOT stop the bot any more: it starts in ASSISTANT
++    MODE (chat / research / tasks work) and retries the connection every 5 min.
++    """
++    global _tg, _bot_error
++    try:
++        problems = SETTINGS.validate()
++        if problems:
++            log.warning("Config incomplete -> ASSISTANT MODE. Missing:")
++            for pr in problems:
++                log.warning("  - %s", pr)
++        for w in SETTINGS.warnings():
++            log.warning("%s", w)
++
++        app_obj.resolve_universe()
++        if app_obj.universe:
++            log.info("Universe: %s", [u["trading"] for u in app_obj.universe])
++            start_note = f"Watch: {', '.join(u['symbol'] for u in app_obj.universe)}"
++        else:
++            log.warning("Kotak NOT connected - starting in ASSISTANT MODE.")
++            start_note = ("\U0001f50c Assistant mode: Kotak not connected yet.\n"
++                          "Chat/research/tasks work. Trading unlocks when the key is fixed.")
++
++        _tg = TelegramRemote(SETTINGS.tg_token, SETTINGS.tg_chat_id, app_obj)
++        _tg.start()                       # its own thread + its own asyncio loop
++        ready = getattr(_tg, "ready", None)
++        if ready is None:
++            log.warning("telegram_remote.py is OLD (no ready). Copy the new one.")
++            time.sleep(3)
++        elif not ready.wait(timeout=25):
++            log.warning("Telegram polling slow to start - first messages may be missed")
++        tg_ok, tg_why = _tg_status()
++        if tg_ok:
++            log.info("Telegram remote is live")
++        else:
++            log.error("Telegram remote NOT live: %s", tg_why)
++
++        paper = "\U0001f7e2 PAPER (fake money - no live orders)"
++        mismatch = ""
++        if MAIN_BUILD != AGENT_BUILD:
++            mismatch = (f"\u26a0\ufe0f COPY MISMATCH: main={MAIN_BUILD} agent={AGENT_BUILD}. "
++                        "Overwrite ALL .py files (including build_stamp.py).\n")
++        tg_line = ("Type / for commands. Telegram is listening now."
++                   if tg_ok else
++                   f"\u26a0\ufe0f Telegram OFF: {tg_why}")
++        app_obj.alert(f"\U0001f916 Bot started: {SETTINGS.bot_mode.upper()} {paper}\n"
++                      f"{mismatch}{start_note}\nBUILD {MAIN_BUILD}  agent={AGENT_BUILD}\n"
++                      "Ask anything - I answer THAT question, not a generic news dump.\n"
++                      f"{tg_line}")
++
++        loop(app_obj)
++    except Exception as e:
++        _bot_error = f"{type(e).__name__}: {e}"
++        log.exception("BOT CRASHED: %s", e)
++
++
++def loop(app_obj: "App"):
++    """The trading loop. Exits when /stop is pressed (or the process dies)."""
+     last_guard = 0.0
+     last_kotak_retry = 0.0
+     eod_sent = False
+-    while True:
++    while not _bot_stop.is_set():
+         try:
+             now = now_ist()
+             if now.weekday() >= 5:
+-                if getattr(app, "comm", None):
+-                    if app.comm.positions:
+-                        app.comm.tick(app.alert)
+-                    app.run_due_comm_tasks()
+-                    time.sleep(30)
++                if getattr(app_obj, "comm", None):
++                    if app_obj.comm.positions:
++                        app_obj.comm.tick(app_obj.alert)
++                    app_obj.run_due_comm_tasks()
++                    _sleep(30)
+                 else:
+-                    time.sleep(120)
++                    _sleep(120)
+                 continue
+             # ---- assistant mode: no Kotak -> chat works, retry connection ----
+-            if not app.universe:
++            if not app_obj.universe:
+                 if time.time() - last_kotak_retry > 300:
+                     last_kotak_retry = time.time()
+-                    app.resolve_universe()
+-                    if app.universe:
+-                        app.alert(f"🔌 Kotak CONNECTED! Watching: "
+-                                  f"{', '.join(u['symbol'] for u in app.universe)}")
+-                app.run_due_tasks({}, now)  # time/notify tasks still work
+-                app.run_due_comm_tasks()
+-                time.sleep(15)
++                    app_obj.resolve_universe()
++                    if app_obj.universe:
++                        app_obj.alert(f"\U0001f50c Kotak CONNECTED! Watching: "
++                                      f"{', '.join(u['symbol'] for u in app_obj.universe)}")
++                app_obj.run_due_tasks({}, now)   # time/notify tasks still work
++                app_obj.run_due_comm_tasks()
++                _sleep(15)
+                 continue
+             if not past(now, SETTINGS.login_time):
+-                time.sleep(30)
++                _sleep(30)
+                 continue
+-            if not app.kotak.ensure_login():
++            if not app_obj.kotak.ensure_login():
+                 log.error("Login failing. Retry in 60s.")
+-                time.sleep(60)
++                _sleep(60)
+                 continue
+-            if app.today != now.date():
+-                app.today = now.date()
+-                app.risk.reset_if_new_day(now)
+-                app.intra.reset_day()
+-                app.swing.reset_day(now.date())
+-                app.swing.last_scan = None
++            if app_obj.today != now.date():
++                app_obj.today = now.date()
++                app_obj.risk.reset_if_new_day(now)
++                app_obj.intra.reset_day()
++                app_obj.swing.reset_day(now.date())
++                app_obj.swing.last_scan = None
+                 eod_sent = False
+             in_hours = past(now, SETTINGS.market_open) and not past(now, SETTINGS.hard_stop)
+             # intraday fast loop
+             if SETTINGS.intraday_on and in_hours and not past(now, "15:25"):
+-                app.intra.poll_once(now)
++                app_obj.intra.poll_once(now)
+             # swing guardian + tasks: every 1s when a position or task is open
+-            hot = bool(app.swing.book.positions) or bool(app.tasks.open_tasks())
++            hot = bool(app_obj.swing.book.positions) or bool(app_obj.tasks.open_tasks())
+             guard_every = 1 if hot else SETTINGS.guardian_seconds
+             if SETTINGS.swing_on and in_hours and time.time() - last_guard >= guard_every:
+                 last_guard = time.time()
+-                toks = [p["token"] for p in app.swing.book.positions.values()]
+-                for t in app.tasks.open_tasks():
++                toks = [p["token"] for p in app_obj.swing.book.positions.values()]
++                for t in app_obj.tasks.open_tasks():
+                     if t.get("symbol"):
+-                        _, tok = app.short_to_trading(t["symbol"])
++                        _, tok = app_obj.short_to_trading(t["symbol"])
+                         if tok:
+                             toks.append(tok)
+-                ltps, raw = {}, app.kotak.get_ltps(sorted(set(toks))) if toks else {}
++                ltps, raw = {}, app_obj.kotak.get_ltps(sorted(set(toks))) if toks else {}
+                 for tok, px in raw.items():
+-                    sym = app.tok2sym.get(tok)
++                    sym = app_obj.tok2sym.get(tok)
+                     if sym:
+                         ltps[sym] = px
+                         ltps[sym.replace("-EQ", "")] = px
+                     else:
+-                        for t in app.tasks.open_tasks():
++                        for t in app_obj.tasks.open_tasks():
+                             if t.get("symbol"):
+                                 ltps[t["symbol"]] = px
+                                 ltps[t["symbol"] + "-EQ"] = px
+-                app.swing.guardian_tick(ltps)
+-                app.run_due_tasks(ltps, now)
+-                app.run_due_comm_tasks()
++                app_obj.swing.guardian_tick(ltps)
++                app_obj.run_due_tasks(ltps, now)
++                app_obj.run_due_comm_tasks()
+             # EOD swing scan
+             if (SETTINGS.swing_on and past(now, SETTINGS.scan_time)
+-                    and app.swing.last_scan != now.date() and not past(now, SETTINGS.hard_stop)):
+-                app.swing.last_scan = now.date()
+-                app.swing.eod_scan()
++                    and app_obj.swing.last_scan != now.date()
++                    and not past(now, SETTINGS.hard_stop)):
++                app_obj.swing.last_scan = now.date()
++                app_obj.swing.eod_scan()
+             # EOD summary
+             if past(now, SETTINGS.hard_stop) and not eod_sent:
+                 eod_sent = True
+-                if SETTINGS.intraday_on and not app.intra.squared_today:
+-                    app.intra.squared_today = True
+-                    app.alert("⏰ " + app.intra.squareoff_all("HARD STOP"))
+-                app.alert(app.cmd_eod())
+-            if getattr(app, "comm", None):
++                if SETTINGS.intraday_on and not app_obj.intra.squared_today:
++                    app_obj.intra.squared_today = True
++                    app_obj.alert("\u23f0 " + app_obj.intra.squareoff_all("HARD STOP"))
++                app_obj.alert(app_obj.cmd_eod())
++            if getattr(app_obj, "comm", None):
+                 if time.time() - last_guard >= 30:
+                     last_guard = time.time()
+-                    if app.comm.positions:
+-                        app.comm.tick(app.alert)
+-                    app.run_due_comm_tasks()
+-            hot = bool(app.swing.book.positions) or bool(app.tasks.open_tasks())
++                    if app_obj.comm.positions:
++                        app_obj.comm.tick(app_obj.alert)
++                    app_obj.run_due_comm_tasks()
++            hot = bool(app_obj.swing.book.positions) or bool(app_obj.tasks.open_tasks())
+             if hot and in_hours:
+-                time.sleep(1)
++                _sleep(1)
+             else:
+-                time.sleep(SETTINGS.poll_seconds if SETTINGS.intraday_on else 5)
++                _sleep(SETTINGS.poll_seconds if SETTINGS.intraday_on else 5)
+         except KeyboardInterrupt:
+             log.info("Stopped by user.")
+             break
+         except Exception as e:
+             log.exception("Loop error (keeps running): %s", e)
+-            time.sleep(10)
++            _sleep(10)
++    log.info("Trading loop stopped.")
++
++
++def _sleep(seconds: float):
++    """Sleep but wake up early when /stop is pressed."""
++    _bot_stop.wait(timeout=seconds)
++
+ 
+-# ==========================================
+-# FASTAPI ENDPOINTS & BOT THREADING SETUP
+-# ==========================================
+-web_app = FastAPI()
++def start_bot() -> tuple:
++    """Start the bot thread once. Returns (ok, message)."""
++    global _bot, _bot_thread, _bot_error, _bot_started_at
++    with _bot_lock:
++        if _bot_thread and _bot_thread.is_alive():
++            return False, "Bot is already running."
++        _bot_stop.clear()
++        _bot_error = ""
++        try:
++            _bot = App()
++        except Exception as e:
++            _bot_error = f"{type(e).__name__}: {e}"
++            log.exception("App() build failed")
++            return False, f"Bot failed to build: {_bot_error}"
++        _bot_started_at = now_ist()
++        _bot_thread = threading.Thread(target=run_bot_once, args=(_bot,),
++                                       name="trading-bot", daemon=True)
++        _bot_thread.start()
++        return True, "Bot launched - Telegram + trading loop starting."
++
++
++def request_stop(timeout: float = 15.0) -> tuple:
++    """Ask the loop to stop and wait for it. Returns (ok, message)."""
++    global _bot_thread
++    with _bot_lock:
++        th = _bot_thread
++        if not th or not th.is_alive():
++            return False, "Bot is not running."
++        _bot_stop.set()
++    th.join(timeout=timeout)
++    if th.is_alive():
++        return True, "Stop requested - loop finishing its current step."
++    _bot_thread = None
++    return True, "Bot stopped."
+ 
++
++def main():
++    """Console entry: python main.py (bot in the foreground, Ctrl-C to quit)."""
++    print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
++    ok, msg = start_bot()
++    print(msg)
++    if not ok:
++        return 1
++    try:
++        while _bot_thread and _bot_thread.is_alive():
++            time.sleep(1)
++    except KeyboardInterrupt:
++        print("Stopping...")
++        request_stop()
++    return 0
++
++
++# ================================================================= web server
++FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend")
++INDEX_HTML = os.path.join(FRONTEND_DIR, "index.html")
++
++
++def _truthy(name: str, default: bool = True) -> bool:
++    return os.getenv(name, str(default)).strip().lower() in ("1", "true", "yes", "y")
++
++
++@asynccontextmanager
++async def _lifespan(_app):
++    """Start the bot with the web server; stop it on shutdown."""
++    if _truthy("BOT_AUTOSTART", True):
++        ok, msg = start_bot()
++        log.info("autostart: %s", msg)
++    else:
++        log.info("BOT_AUTOSTART=false - press Start on the dashboard (or POST /start)")
++    yield
++    request_stop(timeout=5)
++
++
++web_app = FastAPI(title="AI Auto Trader", version=MAIN_BUILD, lifespan=_lifespan)
+ web_app.add_middleware(
+     CORSMiddleware,
+     allow_origins=["*"],
+-    allow_credentials=True,
++    allow_credentials=False,     # "*" + credentials is rejected by browsers
+     allow_methods=["*"],
+     allow_headers=["*"],
+ )
+ 
+-bot_app = None 
+ 
+-@web_app.get("/")
+-def home():
+-    return {"message": "AI Auto Trader API is Running"}
++def _tg_status() -> tuple:
++    """(connected, human text). Never claims green next to a dead poller."""
++    if _tg is None:
++        return False, "not started"
++    err = str(getattr(_tg, "error", "") or "")
++    if err:
++        return False, err
++    if not _tg.is_alive():
++        return False, "polling thread exited"
++    return True, "listening"
++
++
++def _uptime_s() -> int:
++    if not _bot_started_at:
++        return 0
++    return int((now_ist() - _bot_started_at).total_seconds())
++
++
++def _positions_snapshot() -> dict:
++    """Flat list for the dashboard. Paper books first, Kotak only if LIVE."""
++    out = {"positions": [], "source": "paper", "error": ""}
++    if _bot is None:
++        out["error"] = "bot not started"
++        return out
++    try:
++        for r in _bot._swing_marks():          # equity swing (paper or live)
++            out["positions"].append({
++                "symbol": str(r["ts"]).replace("-EQ", ""),
++                "trading_symbol": r["ts"],
++                "type": "swing",
++                "qty": r["q"],
++                "buy_price": round(r["entry"], 2),
++                "ltp": round(r["ltp"], 2),
++                "pnl": round(r["pnl"], 2),
++                "pnl_pct": round(r["pct"], 2),
++                "mode": r["p"].get("mode", "paper"),
++            })
++    except Exception as e:
++        out["error"] = f"equity: {e}"
++    try:
++        comm = getattr(_bot, "comm", None)
++        ltps = dict(getattr(comm, "last_prices", {}) or {}) if comm else {}
++        for name, p in (comm.positions.items() if comm else []):
++            qty = float(p.get("qty") or 0)
++            entry = float(p.get("entry") or 0)
++            ltp = float(ltps.get(name) or 0)
++            out["positions"].append({
++                "symbol": name, "trading_symbol": name, "type": "commodity",
++                "qty": qty, "buy_price": entry, "ltp": ltp,
++                "pnl": round((ltp - entry) * qty, 2) if ltp else 0.0,
++                "pnl_pct": round(100.0 * (ltp - entry) / entry, 2) if (ltp and entry) else 0.0,
++                "mode": p.get("mode", "paper"),
++            })
++    except Exception as e:
++        out["error"] = (out["error"] + f" | commodity: {e}").strip(" |")
++    if _bot.live:
++        out["source"] = "kotak+paper"
++        try:
++            resp = _bot.kotak.positions()
++            rows = resp.get("data") if isinstance(resp, dict) else resp
++            out["kotak_raw"] = rows if isinstance(rows, list) else resp
++        except Exception as e:
++            out["error"] = (out["error"] + f" | kotak: {e}").strip(" |")
++    return out
++
++
++# methods include HEAD: Render (and most uptime monitors) probe with HEAD.
++@web_app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
++def index():
++    """Dashboard. 200 on / also keeps Render's health check happy."""
++    from fastapi.responses import FileResponse, JSONResponse
++    if os.path.exists(INDEX_HTML):
++        return FileResponse(INDEX_HTML)
++    return JSONResponse({"message": "AI Auto Trader API is running",
++                         "hint": "frontend/index.html missing"})
++
++
++@web_app.api_route("/health", methods=["GET", "HEAD"])
++@web_app.api_route("/api/health", methods=["GET", "HEAD"])
++def health():
++    return {"ok": True, "bot": bot_state(), "uptime_s": _uptime_s()}
++
+ 
+ @web_app.get("/api/status")
+ def get_status():
+-    return {
+-        "status": "online",
+-        "paper_trading": getattr(bot_app, "is_paper", True) if bot_app else True
++    s = bot_state()
++    st = {
++        "status": "online" if s == "running" else s,
++        "bot": s,
++        "paper_trading": (not _bot.live) if _bot else True,
++        "mode": SETTINGS.bot_mode,
++        "assistant_mode": bool(_bot is not None and not _bot.universe),
++        "kotak_connected": bool(_bot is not None and _bot.universe),
++        "telegram_connected": _tg_status()[0],
++        "telegram": _tg_status()[1],
++        "uptime_s": _uptime_s(),
++        "build": MAIN_BUILD,
++        "error": _bot_error,
+     }
++    return st
++
+ 
+ @web_app.get("/api/positions")
+-def get_positions():
+-    if bot_app and hasattr(bot_app, "kotak"):
+-        try:
+-            positions = bot_app.kotak.get_positions()
+-            return {"positions": positions}
+-        except Exception as e:
+-            return {"positions": [], "error": str(e)}
+-    return {"positions": []}
++async def get_positions():
++    from fastapi.concurrency import run_in_threadpool
++    try:
++        return await run_in_threadpool(_positions_snapshot)   # LTP fetch is blocking
++    except Exception as e:
++        return {"positions": [], "error": str(e)}
++
++
++@web_app.get("/api/tasks")
++def get_tasks():
++    if _bot is None:
++        return {"tasks": [], "error": "bot not started"}
++    try:
++        return {"tasks": _bot.tasks.open_tasks(),
++                "commodity_tasks": _bot.comm_tasks.open_tasks()}
++    except Exception as e:
++        return {"tasks": [], "error": str(e)}
++
++
++@web_app.get("/api/log")
++def get_log(lines: int = 120):
++    """Tail trades.log - handy on Render where the disk is not browsable."""
++    from fastapi.responses import PlainTextResponse
++    try:
++        with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
++            tail = f.readlines()[-max(1, min(int(lines), 2000)):]
++        return PlainTextResponse("".join(tail) or "(log empty)")
++    except FileNotFoundError:
++        return PlainTextResponse("(no trades.log yet)")
++
++
++@web_app.post("/start")
++def start_endpoint():
++    ok, msg = start_bot()
++    return {"ok": ok, "message": msg, "bot": bot_state()}
++
++
++@web_app.post("/stop")
++def stop_endpoint():
++    ok, msg = request_stop()
++    return {"ok": ok, "message": msg, "bot": bot_state()}
++
++
++def serve_web():
++    """One process, one port. Render gives the port in $PORT."""
++    port = int(os.getenv("PORT", "10000"))
++    host = os.getenv("HOST", "0.0.0.0")
++    print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
++    print(f"Web on http://{host}:{port}  |  data dir: {paths.data_dir()}")
++    # workers=1 on purpose: more workers = more bots = duplicate Telegram replies
++    uvicorn.run(web_app, host=host, port=port, workers=1, log_level="info")
+ 
+-# Bot runner function - Upar bani app class ko use karega
+-def run_trading_bot():
+-    global bot_app
+-    # Yahan app() tabhi call hoga jab main.py poora load ho chuka hoga
+-    bot_app = app()
+-    bot_app.run()
+ 
+ if __name__ == "__main__":
+-    # 1. Trading Bot ko Background Thread me chalayein
+-    bot_thread = threading.Thread(target=run_trading_bot, daemon=True)
+-    bot_thread.start()
+-
+-    # 2. FastAPI Web Server ko Render Port par chalayein
+-    uvicorn.run(web_app, host="0.0.0.0", port=10000)
+-    main()
++    serve_web()
+diff --git a/kotak-auto-trader/memory.py b/kotak-auto-trader/memory.py
+index 35c374f..187e280 100644
+--- a/kotak-auto-trader/memory.py
++++ b/kotak-auto-trader/memory.py
+@@ -4,10 +4,12 @@ import json
+ import logging
+ import os
+ 
++import paths
++
+ log = logging.getLogger("memory")
+ 
+-MEM_FILE = "memory.json"
+-PROFILE_FILE = "user_profile.json"
++MEM_FILE = paths.data_path("memory.json")
++PROFILE_FILE = paths.data_path("user_profile.json")
+ MAX_TURNS = 8
+ 
+ 
+diff --git a/kotak-auto-trader/paths.py b/kotak-auto-trader/paths.py
+new file mode 100644
+index 0000000..b60743d
+--- /dev/null
++++ b/kotak-auto-trader/paths.py
+@@ -0,0 +1,37 @@
++"""Where the bot keeps its state files.
++
++On a laptop this is just the project folder (current working directory), so
++nothing changes for you.
++
++On Render / Heroku / Fly the disk is EPHEMERAL: every deploy or restart wipes
++tasks.json, swing_positions.json, swing_trades.csv, memory.json ...
++Fix without touching the code:
++
++  1. Render dashboard -> your service -> Disks -> Add disk
++       Mount path: /var/data      Size: 1 GB (minimum)
++  2. Environment -> add:  DATA_DIR=/var/data
++
++Now every state file lives on the disk and survives deploys/restarts.
++"""
++import os
++
++_DIR = None
++
++
++def data_dir() -> str:
++    """Absolute folder for state files. DATA_DIR env var wins, else cwd."""
++    global _DIR
++    if _DIR is None:
++        d = os.getenv("DATA_DIR", "").strip() or os.getcwd()
++        d = os.path.abspath(os.path.expanduser(d))
++        try:
++            os.makedirs(d, exist_ok=True)
++        except OSError:
++            d = os.getcwd()          # unwritable mount -> fall back, never crash
++        _DIR = d
++    return _DIR
++
++
++def data_path(name: str) -> str:
++    """Full path of a state file inside data_dir()."""
++    return os.path.join(data_dir(), name)
+diff --git a/kotak-auto-trader/requirements.txt b/kotak-auto-trader/requirements.txt
+index f85c66a..712fd37 100644
+--- a/kotak-auto-trader/requirements.txt
++++ b/kotak-auto-trader/requirements.txt
+@@ -1,8 +1,22 @@
+-kotakneoapi
+-python-telegram-bot>=21,<23
+-pyotp
+-python-dotenv
+-pandas
+-fastapi
+-uvicorn
+-flask
++# Pinned on purpose: an unpinned build on a fresh Render deploy can resolve a
++# brand-new release that has no wheel for your Python and the build explodes.
++# Python: see .python-version (3.12) / PYTHON_VERSION env var on Render.
++
++# --- Kotak Neo official SDK (imports as neo_api_client) ---
++kotakneoapi>=3.0.5,<4
++
++# --- Telegram remote (v21/v22 = the async API telegram_remote.py uses) ---
++python-telegram-bot>=21.6,<23
++
++# --- web: dashboard + JSON API + Render's port ---
++fastapi>=0.115,<1
++uvicorn[standard]>=0.30,<1
++
++# --- support ---
++pyotp>=2.9,<3
++python-dotenv>=1.0,<2
++pandas>=2.2,<3
++tzdata>=2024.1        # ZoneInfo("Asia/Kolkata") on hosts without a system tz database
++
++# flask is NOT needed any more: app.py is now a thin wrapper around FastAPI.
++# (left out on purpose — one server, one port, one bot.)
+diff --git a/kotak-auto-trader/risk.py b/kotak-auto-trader/risk.py
+index 914f71c..85b1bfa 100644
+--- a/kotak-auto-trader/risk.py
++++ b/kotak-auto-trader/risk.py
+@@ -2,7 +2,9 @@
+ import os
+ from datetime import datetime
+ 
+-KILL_FILE = "KILLSWITCH"
++import paths
++
++KILL_FILE = paths.data_path("KILLSWITCH")
+ 
+ 
+ class RiskManager:
+diff --git a/kotak-auto-trader/swing.py b/kotak-auto-trader/swing.py
+index b60f9b4..efcab34 100644
+--- a/kotak-auto-trader/swing.py
++++ b/kotak-auto-trader/swing.py
+@@ -12,10 +12,13 @@ import logging
+ import os
+ from datetime import datetime
+ 
++import paths
++
+ log = logging.getLogger("swing")
+ 
+-POS_FILE = "swing_positions.json"   # open multi-day positions (survives restart)
+-TRADES_FILE = "swing_trades.csv"    # closed-trade journal -> accuracy stats
++# state lives in paths.data_dir() -> survives restarts when DATA_DIR is a mounted disk
++POS_FILE = paths.data_path("swing_positions.json")    # open multi-day positions
++TRADES_FILE = paths.data_path("swing_trades.csv")     # closed-trade journal -> accuracy
+ 
+ 
+ # ---------------- indicators (plain python, no extra library) ----------------
+diff --git a/kotak-auto-trader/tasks.py b/kotak-auto-trader/tasks.py
+index 1bcb5e0..3a41c2a 100644
+--- a/kotak-auto-trader/tasks.py
++++ b/kotak-auto-trader/tasks.py
+@@ -10,6 +10,8 @@ import logging
+ import os
+ from datetime import datetime, timedelta
+ 
++import paths
++
+ log = logging.getLogger("tasks")
+ 
+ 
+@@ -33,7 +35,10 @@ TASKS_FILE = "tasks.json"
+ 
+ class TaskEngine:
+     def __init__(self, path: str = TASKS_FILE):
+-        self.path = path or TASKS_FILE
++        # a bare file name ("tasks.json") goes to the state dir; an absolute
++        # path is used as-is. Keeps old callers working.
++        p = path or TASKS_FILE
++        self.path = p if os.path.isabs(p) else paths.data_path(p)
+         self.tasks = []
+         self._next_id = 1
+         self.load()
+diff --git a/kotak-auto-trader/telegram_remote.py b/kotak-auto-trader/telegram_remote.py
+index 05a4831..46e5819 100644
+--- a/kotak-auto-trader/telegram_remote.py
++++ b/kotak-auto-trader/telegram_remote.py
+@@ -148,6 +148,10 @@ class TelegramRemote(threading.Thread):
+         self.chat_id = str(chat_id)
+         self.app = app
+         self.ready = threading.Event()
++        # "" while healthy. Set when polling dies or the token/chat id is missing,
++        # so the dashboard + /api/status can tell the TRUTH instead of showing
++        # a green "connected" next to a dead bot.
++        self.error = ""
+ 
+     def _allowed(self, update) -> bool:
+         try:
+@@ -179,6 +183,8 @@ class TelegramRemote(threading.Thread):
+ 
+     def run(self):
+         if not self.token or "PASTE" in self.token or not self.chat_id:
++            self.error = ("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing in .env "
++                          "(mobile remote OFF)")
+             log.warning("Telegram not configured — mobile remote OFF")
+             self.ready.set()
+             return
+@@ -193,6 +199,7 @@ class TelegramRemote(threading.Thread):
+             except ImportError:
+                 MenuButtonCommands = None
+         except Exception as e:
++            self.error = f"python-telegram-bot missing/broken: {e}"
+             log.error("telegram lib missing? pip install python-telegram-bot : %s", e)
+             self.ready.set()
+             return
+@@ -357,4 +364,12 @@ class TelegramRemote(threading.Thread):
+         try:
+             asyncio.run(amain())
+         except Exception as e:
++            # Typical cause: bad token -> "Unauthorized", or no outbound network.
++            self.error = f"polling stopped: {e}"
+             log.error("telegram polling stopped: %s", e)
++            try:
++                self.app.alert(f"⚠️ Telegram remote died: {e}\n"
++                               "Check TELEGRAM_BOT_TOKEN (and that the host can "
++                               "reach api.telegram.org:443).")
++            except Exception:
++                pass
+diff --git a/render.yaml b/render.yaml
+new file mode 100644
+index 0000000..e0756ed
+--- /dev/null
++++ b/render.yaml
+@@ -0,0 +1,38 @@
++# Render blueprint (OPTIONAL).
++#
++# Your service already exists, so the easiest path is to keep it and just set
++# the 3 things below in the Render dashboard:
++#   Root Directory : kotak-auto-trader
++#   Build Command  : pip install -r requirements.txt
++#   Start Command  : python main.py
++#   Environment    : PYTHON_VERSION = 3.12.8   (highest precedence on Render)
++#
++# This file is only used if you create a NEW service from the repo
++# (Render dashboard -> New + -> Blueprint). It must sit at the repo ROOT.
++services:
++  - type: web
++    name: my-ai-trader
++    runtime: python
++    rootDir: kotak-auto-trader
++    plan: free
++    buildCommand: pip install -r requirements.txt
++    startCommand: python main.py
++    healthCheckPath: /health
++    envVars:
++      # Render's default is Python 3.14.3 — brand new, and pandas / pydantic-core
++      # wheels are not always there yet. 3.12 is boring and reliable.
++      - key: PYTHON_VERSION
++        value: 3.12.8
++      - key: BOT_MODE
++        value: swing
++      - key: TRADING_MODE
++        value: paper
++      - key: ENABLE_LIVE_ORDERS
++        value: "false"
++      # Mount a Render Disk at /var/data (Dashboard -> Disks -> Add disk) and this
++      # makes tasks.json / swing_positions.json / swing_trades.csv survive restarts.
++      - key: DATA_DIR
++        value: /var/data
++      # Secrets — set these by hand in the dashboard, never commit them:
++      #   NEO_CONSUMER_KEY, NEO_MOBILE_NUMBER, NEO_UCC, NEO_MPIN, NEO_TOTP_SECRET,
++      #   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY

@@ -6,3 +6,8 @@ sample_*.csv
 memory.json
 user_profile.json
 brief_*.md
+
+# deploy noise
+logs/
+trades.log
+supervise.log
