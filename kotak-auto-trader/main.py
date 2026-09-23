@@ -10,6 +10,7 @@ import sys
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from app import App
 
 import threading
 import uvicorn
