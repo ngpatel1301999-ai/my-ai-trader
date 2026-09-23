@@ -5,16 +5,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Trader Dashboard</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }
-        .container { max-width: 900px; margin: auto; }
-        h1 { color: #38bdf8; text-align: center; }
-        .card { background: #1e293b; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
-        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-weight: bold; background: #22c55e; color: #000; }
-        .btn { background: #0284c7; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; }
-        .btn:hover { background: #0369a1; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border-bottom: 1px solid #334155; padding: 12px; text-align: left; }
-        th { color: #94a3b8; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #0f172a; 
+            color: #f8fafc; 
+            margin: 0; 
+            padding: 20px; 
+        }
+        .container { 
+            max-width: 900px; 
+            margin: auto; 
+        }
+        h1 { 
+            color: #38bdf8; 
+            text-align: center; 
+        }
+        .card { 
+            background: #1e293b; 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); 
+        }
+        .status-badge { 
+            display: inline-block; 
+            padding: 6px 12px; 
+            border-radius: 20px; 
+            font-weight: bold; 
+            background: #22c55e; 
+            color: #000; 
+        }
+        .btn { 
+            background: #0284c7; 
+            color: white; 
+            border: none; 
+            padding: 10px 18px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 14px; 
+            font-weight: bold; 
+        }
+        .btn:hover { 
+            background: #0369a1; 
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 15px; 
+        }
+        th, td { 
+            border-bottom: 1px solid #334155; 
+            padding: 12px; 
+            text-align: left; 
+        }
+        th { 
+            color: #94a3b8; 
+        }
     </style>
 </head>
 <body>
@@ -22,14 +68,14 @@
 <div class="container">
     <h1>🚀 AI Auto Trader Dashboard</h1>
 
-    <!-- Bot Status Section -->
+    <!-- Bot Status Card -->
     <div class="card">
         <h3>Bot Status: <span id="bot-status" class="status-badge">Checking...</span></h3>
         <p><strong>Mode:</strong> <span id="trading-mode">-</span></p>
         <button class="btn" onclick="fetchStatus()">Refresh Status</button>
     </div>
 
-    <!-- Live Positions Section -->
+    <!-- Positions Card -->
     <div class="card">
         <h3>Live Positions</h3>
         <button class="btn" onclick="fetchPositions()">Fetch Positions</button>
@@ -51,27 +97,31 @@
 </div>
 
 <script>
-    // ⚠️ APNA RENDER URL YAHAN BADLEIN
-    const BACKEND_URL = "https://YOUR-RENDER-APP-NAME.onrender.com"; 
+    // Updated Live Render Backend URL
+    const BACKEND_URL = "https://my-ai-trader-dlxq.onrender.com"; 
 
     async function fetchStatus() {
+        const badge = document.getElementById('bot-status');
         try {
             const res = await fetch(`${BACKEND_URL}/api/status`);
             const data = await res.json();
-            document.getElementById('bot-status').innerText = data.status.toUpperCase();
+            badge.innerText = data.status ? data.status.toUpperCase() : "ONLINE";
+            badge.style.background = "#22c55e";
+            badge.style.color = "#000";
             document.getElementById('trading-mode').innerText = data.paper_trading ? "Paper Trading" : "LIVE Trading";
         } catch (err) {
-            document.getElementById('bot-status').innerText = "DISCONNECTED";
-            document.getElementById('bot-status').style.background = "#ef4444";
+            badge.innerText = "DISCONNECTED";
+            badge.style.background = "#ef4444";
+            badge.style.color = "#fff";
             console.error("Error fetching status:", err);
         }
     }
 
     async function fetchPositions() {
+        const tbody = document.getElementById('positions-list');
         try {
             const res = await fetch(`${BACKEND_URL}/api/positions`);
             const data = await res.json();
-            const tbody = document.getElementById('positions-list');
             tbody.innerHTML = "";
 
             if (!data.positions || data.positions.length === 0) {
@@ -90,11 +140,12 @@
                 tbody.innerHTML += row;
             });
         } catch (err) {
-            alert("Positions load nahi ho payi. Backend check karein!");
+            alert("Positions load nahi ho payi. Backend connection check karein!");
+            console.error("Error fetching positions:", err);
         }
     }
 
-    // Page load hote hi status check karein
+    // Load status automatically on open
     window.onload = fetchStatus;
 </script>
 
