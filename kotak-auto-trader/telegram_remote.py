@@ -175,11 +175,35 @@ class TelegramRemote(threading.Thread):
         self.chat_id = str(chat_id)
         self.app = app
         self.ready = threading.Event()
+        self._stop = threading.Event()  # set by stop() -> ends the polling loop
+        self.stopped = False            # True once shutdown has completed
         self._last_conflict_log = 0.0   # log a Conflict once per 5 min, not per poll
         # "" while healthy. Set when polling dies or the token/chat id is missing,
         # so the dashboard + /api/status can tell the TRUTH instead of showing
         # a green "connected" next to a dead bot.
         self.error = ""
+
+    def stop(self, timeout: float = 12.0) -> bool:
+        """Close Telegram polling and shut the asyncio application down.
+
+        Without this the daemon thread keeps its own asyncio loop alive and
+        KEEPS ANSWERING MESSAGES - so the dashboard says "Bot stopped" while
+        Telegram still replies. Returns True once the thread has really exited.
+        """
+        already = self._stop.is_set()
+        self._stop.set()
+        if not already:
+            log.info("Telegram remote: stop requested")
+        if threading.current_thread() is not self and self.is_alive():
+            self.join(timeout=timeout)
+        if self.is_alive():
+            self.error = ("stop requested but the polling thread did not exit "
+                          "within %.0fs" % timeout)
+            log.warning("%s", self.error)
+            return False
+        self.stopped = True
+        self.error = ""
+        return True
 
     def _allowed(self, update) -> bool:
         try:
@@ -412,7 +436,28 @@ class TelegramRemote(threading.Thread):
             )
             log.info("Telegram remote ON (drop_pending_updates=%s)", drop)
             self.ready.set()
-            await asyncio.Event().wait()
+            # Block until stop() is called. The old code was
+            # `await asyncio.Event().wait()` - an infinite wait that NOTHING
+            # could ever cancel, which is exactly why "Stop Bot" left Telegram
+            # answering messages while the dashboard reported "stopped".
+            while not self._stop.is_set():
+                await asyncio.sleep(0.5)
+            log.info("Telegram remote: closing polling...")
+            try:
+                if app_tg.updater is not None and app_tg.updater.running:
+                    await app_tg.updater.stop()      # stop getUpdates first
+            except Exception as e:
+                log.warning("updater.stop failed: %s", e)
+            try:
+                await app_tg.stop()
+            except Exception as e:
+                log.warning("app.stop failed: %s", e)
+            try:
+                await app_tg.shutdown()
+            except Exception as e:
+                log.warning("app.shutdown failed: %s", e)
+            self.stopped = True
+            log.info("Telegram remote OFF - polling closed cleanly")
 
         try:
             asyncio.run(amain())

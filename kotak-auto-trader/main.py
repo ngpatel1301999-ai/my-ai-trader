@@ -1621,6 +1621,15 @@ def run_bot_once(app_obj: "App"):
     except Exception as e:
         _bot_error = f"{type(e).__name__}: {e}"
         log.exception("BOT CRASHED: %s", e)
+    finally:
+        # Whatever happened - clean exit, crash or /stop - Telegram must go down
+        # too, or it keeps answering while the dashboard shows "stopped".
+        tg = _tg
+        if tg is not None and not getattr(tg, "stopped", False):
+            try:
+                tg.stop()
+            except Exception as e:
+                log.warning("telegram stop in finally failed: %s", e)
 
 
 def loop(app_obj: "App"):
@@ -1735,12 +1744,15 @@ def _sleep(seconds: float):
 
 def start_bot() -> tuple:
     """Start the bot thread once. Returns (ok, message)."""
-    global _bot, _bot_thread, _bot_error, _bot_started_at
+    global _bot, _bot_thread, _bot_error, _bot_started_at, _tg
     with _bot_lock:
         if _bot_thread and _bot_thread.is_alive():
             return False, "Bot is already running."
         _bot_stop.clear()
         _bot_error = ""
+        # A stopped TelegramRemote can never be restarted - its asyncio loop is
+        # closed. Drop the reference so run_bot_once() builds a fresh one.
+        _tg = None
         try:
             _bot = App()
         except Exception as e:
@@ -1755,18 +1767,37 @@ def start_bot() -> tuple:
 
 
 def request_stop(timeout: float = 15.0) -> tuple:
-    """Ask the loop to stop and wait for it. Returns (ok, message)."""
+    """Stop the trading loop AND close Telegram polling. Returns (ok, message).
+
+    Stopping only the loop used to leave TelegramRemote (its own daemon thread
+    with its own asyncio loop) polling forever - the dashboard said "Bot
+    stopped" while Telegram kept answering every message.
+    """
     global _bot_thread
     with _bot_lock:
         th = _bot_thread
+        tg = _tg
         if not th or not th.is_alive():
+            # loop already down, but Telegram may still be listening
+            if tg is not None and not getattr(tg, "stopped", False):
+                tg.stop()
+                return True, "Bot was not running - Telegram polling closed."
             return False, "Bot is not running."
         _bot_stop.set()
     th.join(timeout=timeout)
+    # close Telegram even if the loop thread was slow to exit
+    tg_closed = True
+    if tg is not None:
+        try:
+            tg_closed = tg.stop()
+        except Exception as e:
+            log.warning("telegram stop failed: %s", e)
+            tg_closed = False
     if th.is_alive():
         return True, "Stop requested - loop finishing its current step."
     _bot_thread = None
-    return True, "Bot stopped."
+    return True, ("Bot stopped - Telegram polling closed." if tg_closed
+                  else "Bot stopped - WARNING: Telegram thread did not exit")
 
 
 def main():
@@ -1820,6 +1851,9 @@ def _tg_status() -> tuple:
     """(connected, human text). Never claims green next to a dead poller."""
     if _tg is None:
         return False, "not started"
+    ev = getattr(_tg, "_stop", None)
+    if getattr(_tg, "stopped", False) or (ev is not None and ev.is_set()):
+        return False, "stopped (polling closed)"
     err = str(getattr(_tg, "error", "") or "")
     if err:
         return False, err
