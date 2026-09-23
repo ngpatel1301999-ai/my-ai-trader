@@ -5,20 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Trader Dashboard</title>
     <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        html {
+            -webkit-text-size-adjust: 100%;   /* stop iOS auto-inflating text */
+            text-size-adjust: 100%;
+        }
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: #0f172a;
             color: #f8fafc;
             margin: 0;
             padding: 20px;
+            padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+            overflow-x: hidden;               /* nothing may scroll sideways */
+            overflow-wrap: break-word;
+            word-break: break-word;
         }
         .container {
             max-width: 900px;
             margin: auto;
+            width: 100%;
         }
         h1 {
             color: #38bdf8;
             text-align: center;
+            margin: 0 0 18px;
+            line-height: 1.25;
         }
         .card {
             background: #1e293b;
@@ -35,6 +47,12 @@
             background: #22c55e;
             color: #000;
         }
+        .btn-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
         .btn {
             background: #0284c7;
             color: white;
@@ -44,17 +62,26 @@
             cursor: pointer;
             font-size: 14px;
             font-weight: bold;
-            margin-right: 8px;
+            min-height: 44px;          /* Apple/Google minimum touch target */
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
         }
         .btn:hover { background: #0369a1; }
+        .btn:active { transform: scale(0.97); }
         .btn.danger { background: #dc2626; }
         .btn.danger:hover { background: #b91c1c; }
         .btn.ghost { background: #334155; }
         .btn.ghost:hover { background: #475569; }
+        .table-wrap {
+            width: 100%;
+            margin-top: 15px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 15px;
+            min-width: 520px;     /* below this it scrolls instead of squashing */
         }
         th, td {
             border-bottom: 1px solid #334155;
@@ -63,8 +90,79 @@
         }
         th { color: #94a3b8; }
         .meta { color: #94a3b8; font-size: 13px; line-height: 1.7; }
+        h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
         .err { color: #fca5a5; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
         .ok  { color: #86efac; font-size: 13px; margin-top: 10px; }
+
+        /* ---------- TABLET / small laptop ---------- */
+        @media (max-width: 900px) {
+            body { padding: 14px; }
+            .card { padding: 16px; }
+        }
+
+        /* ---------- PHONE ---------- */
+        @media (max-width: 640px) {
+            body { padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+            h1 { font-size: 1.25rem; margin-bottom: 14px; }
+            .card { padding: 13px; margin-bottom: 13px; border-radius: 10px; }
+            .meta { font-size: 12.5px; line-height: 1.75; }
+            .status-badge { font-size: 12px; padding: 5px 10px; }
+
+            /* 4 buttons in a row overflow a phone -> 2x2 grid, full width */
+            .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+            .btn { width: 100%; margin: 0; padding: 12px 8px; font-size: 13.5px; }
+
+            /* 6-column table cannot fit 360px -> turn each row into a card */
+            .table-wrap { overflow-x: visible; margin-top: 12px; }
+            table { min-width: 0; }
+            table, thead, tbody, tr, th, td { display: block; width: 100%; }
+            thead { position: absolute; width: 1px; height: 1px;
+                    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+            tbody tr {
+                background: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 10px;
+                padding: 6px 12px;
+                margin-bottom: 10px;
+            }
+            tbody td {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 14px;
+                border-bottom: 1px dashed #293548;
+                padding: 8px 0;
+                text-align: right;
+                font-size: 13.5px;
+            }
+            tbody td:last-child { border-bottom: none; }
+            /* label comes from data-label, set in fetchPositions() */
+            tbody td::before {
+                content: attr(data-label);
+                color: #94a3b8;
+                font-weight: 600;
+                font-size: 11.5px;
+                text-transform: uppercase;
+                letter-spacing: .04em;
+                text-align: left;
+                flex: 0 0 auto;
+            }
+            /* "No active positions" / "Click fetch" span the whole row */
+            tbody td[colspan] { display: block; text-align: center; padding: 16px 0; }
+            tbody td[colspan]::before { content: none; }
+
+            /* keep-alive box gets tighter */
+            #keepalive { padding: 9px 10px !important; font-size: 12px !important; }
+            #keepalive div:last-child { font-size: 11px !important; }
+            #backend-url { font-size: 11px !important; }
+            .err, .ok { font-size: 12.5px; }
+        }
+
+        /* ---------- very small phones (Galaxy Fold, iPhone SE) ---------- */
+        @media (max-width: 360px) {
+            .btn-row { grid-template-columns: 1fr; }   /* one button per row */
+            h1 { font-size: 1.1rem; }
+        }
     </style>
 </head>
 <body>
@@ -84,10 +182,12 @@
             <strong>Backend:</strong> <span id="backend-url"
                 style="font-size:12px;word-break:break-all">-</span>
         </p>
-        <button class="btn" onclick="fetchStatus()">Refresh Status</button>
-        <button class="btn" onclick="wakeBot()">🔔 Wake Bot</button>
-        <button class="btn" onclick="startBot()">▶ Start Bot</button>
-        <button class="btn danger" onclick="stopBot()">■ Stop Bot</button>
+        <div class="btn-row">
+            <button class="btn" onclick="fetchStatus()">🔄 Refresh</button>
+            <button class="btn" onclick="wakeBot()">🔔 Wake Bot</button>
+            <button class="btn" onclick="startBot()">▶ Start Bot</button>
+            <button class="btn danger" onclick="stopBot()">■ Stop Bot</button>
+        </div>
         <div id="msg"></div>
 
         <!-- Keep-alive: THIS TAB is what stops Render's free plan sleeping -->
@@ -109,7 +209,10 @@
     <!-- Positions Card -->
     <div class="card">
         <h3>Live Positions</h3>
-        <button class="btn" onclick="fetchPositions()">Fetch Positions</button>
+        <div class="btn-row">
+            <button class="btn" onclick="fetchPositions()">🔄 Fetch Positions</button>
+        </div>
+        <div class="table-wrap">
         <table>
             <thead>
                 <tr>
@@ -125,6 +228,7 @@
                 <tr><td colspan="6" style="text-align:center;">Click fetch to load data</td></tr>
             </tbody>
         </table>
+        </div>
     </div>
 </div>
 
@@ -277,13 +381,15 @@
             }
             data.positions.forEach(pos => {
                 const pnl = Number(pos.pnl || 0);
+                // data-label drives the mobile card view (see the 640px media
+                // query): on a phone each cell prints its own field name.
                 tbody.innerHTML += `<tr>
-                    <td>${pos.symbol}</td>
-                    <td>${pos.type || ''}</td>
-                    <td>${pos.qty}</td>
-                    <td>${pos.buy_price}</td>
-                    <td>${pos.ltp || '?'}</td>
-                    <td style="color: ${pnl >= 0 ? '#22c55e' : '#ef4444'}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</td>
+                    <td data-label="Symbol">${pos.symbol}</td>
+                    <td data-label="Type">${pos.type || '-'}</td>
+                    <td data-label="Qty">${pos.qty}</td>
+                    <td data-label="Buy Price">${pos.buy_price}</td>
+                    <td data-label="LTP">${pos.ltp || '?'}</td>
+                    <td data-label="P&amp;L" style="color: ${pnl >= 0 ? '#22c55e' : '#ef4444'}; font-weight:700">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</td>
                 </tr>`;
             });
             show(data.error ? data.error : '', false);
