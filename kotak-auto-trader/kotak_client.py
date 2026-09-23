@@ -13,6 +13,7 @@ So this client:
 import json
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -114,6 +115,8 @@ class KotakClient:
         self.ucc = ucc
         self.mpin = mpin
         self.totp_secret = totp_secret
+        self._login_lock = threading.Lock()
+        self._last_attempt_at = 0.0
         self.segment = segment
         self.client = None
         self.logged_in = False
@@ -182,7 +185,21 @@ class KotakClient:
         if self.logged_in and self.client:
             return True
         for attempt in (1, 2, 3):
-            if self.login():
+            with self._login_lock:
+                # Another thread may have logged in while we waited - re-check
+                # so we never fire two logins at Kotak for the same UCC (rapid
+                # repeat logins are themselves a silent-reject cause).
+                if self.logged_in and self.client:
+                    return True
+                now = time.time()
+                if self._last_attempt_at and (now - self._last_attempt_at) < 8:
+                    # Someone JUST tried; hammering again inside 8s only burns a
+                    # TOTP code Kotak will reject as a replay. Reuse their result.
+                    ok = bool(self.logged_in)
+                else:
+                    self._last_attempt_at = now
+                    ok = self.login()
+            if ok:
                 return True
             if attempt < 3:
                 # TOTP codes rotate every 30s. The old code slept 5s and retried,
@@ -193,7 +210,7 @@ class KotakClient:
                 wait = _wait_for_fresh_totp()
                 log.warning("Kotak login attempt %d failed (%s) - waiting %.0fs "
                             "for a fresh TOTP window", attempt, self.login_error, wait)
-                time.sleep(wait)
+                time.sleep(wait)      # OUTSIDE the lock: never block other threads
         return False
 
     # ---------------- market data ----------------
