@@ -52,7 +52,7 @@ def get_positions():
 
 def run_trading_bot():
     global bot_app
-    bot_app = App()
+    bot_app = app()
     bot_app.run() # Aapka main loop
 
 if __name__ == "__main__":
