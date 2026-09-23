@@ -208,42 +208,105 @@ class App:
         parts = []
         if self.s.swing_on or self.swing.book.positions:
             a = self.swing.book.accuracy()
-            parts.append(f"SWING realized(all): Rs {a.get('total', 0):+.2f} "
-                         f"| unreal: Rs {self.swing.unreal():+.2f}")
+            rows = self._swing_marks()
+            # Sum the SAME rows the per-position block prints. The old code read
+            # self.swing.unreal(), which used _last_ltps directly - empty at
+            # startup - so the headline said "unreal: Rs +0.00" right next to a
+            # position showing +152.00. That can not happen any more.
+            unreal = sum(r["pnl"] for r in rows)
+            missing = [r["ts"] for r in rows if not r.get("ltp_ok")]
+            line = (f"SWING realized(all): Rs {a.get('total', 0):+.2f} "
+                    f"| unreal: Rs {unreal:+.2f}")
+            if missing:
+                line += f"\n  ⚠️ LTP nahi mila: {', '.join(missing)}"
+            parts.append(line)
         if self.s.intraday_on:
             parts.append(f"INTRADAY today: Rs {self.intra.paper.realized:+.2f} "
                          f"(paper) | unreal Rs {self.intra.paper.unrealized(self.intra.ltps):+.2f}")
         return "\n".join(parts) or "No trades yet."
 
     def _swing_marks(self) -> list:
-        """Per open swing: invested, current value, P&L, LTP."""
+        """Per open swing: invested, current value, P&L, LTP.
+
+        LTP resolution used to depend on two things that silently failed:
+          * `_last_ltps` being warm - it is EMPTY at startup / after a restart,
+          * positions carrying a `token` field - swing.py never saves one, so
+            `if p.get("token")` was always False and the fetch never ran.
+        Result: open positions showed "LTP ?" and a fake "value Rs 0.00" while
+        the stock was perfectly priceable. Now we resolve the token from the
+        universe, fetch in ONE batch, retry individually, then fall back to
+        Yahoo - and flag `ltp_ok` so the text never prints a misleading 0.00.
+        """
         pos = self.swing.book.positions
         if not pos:
             return []
         ltps = dict(getattr(self, "_last_ltps", {}) or {})
-        need = []
+        # normalise: make the "-EQ"-free spelling available for every warm key
+        for k, v in list(ltps.items()):
+            short = str(k).replace("-EQ", "")
+            if v and not ltps.get(short):
+                ltps[short] = v
+
+        # ---- 1) a token for every position that still has no price ----
+        need = {}                          # str(token) -> trading symbol
         for ts, p in pos.items():
-            if not (ltps.get(ts) or ltps.get(str(ts).replace("-EQ", ""))):
-                if p.get("token"):
-                    need.append(p["token"])
+            short = str(ts).replace("-EQ", "")
+            if ltps.get(ts) or ltps.get(short):
+                continue
+            tok = p.get("token")
+            if not tok:
+                try:
+                    _ts, tok = self.short_to_trading(short)
+                except Exception:
+                    tok = None
+            if tok:
+                p["token"] = tok           # remember it; next call is cheap
+                need[str(tok)] = ts
+
+        # ---- 2) one batched quotes call ----
         if need:
             try:
-                raw = self.kotak.get_ltps(sorted(set(need))) or {}
-                for tok, px in raw.items():
-                    if not px:
-                        continue
-                    sym = self.tok2sym.get(tok)
-                    if not sym:
-                        for ts, p in pos.items():
-                            if p.get("token") == tok:
-                                sym = ts
-                                break
-                    if sym:
-                        ltps[sym] = px
-                        ltps[str(sym).replace("-EQ", "")] = px
-                self._last_ltps = ltps
-            except Exception:
-                pass
+                raw = self.kotak.get_ltps(sorted(need)) or {}
+            except Exception as e:
+                log.warning("swing LTP batch failed: %s", e)
+                raw = {}
+            for tok, px in raw.items():
+                if not px:
+                    continue
+                ts = (need.get(str(tok)) or self.tok2sym.get(tok)
+                      or self.tok2sym.get(str(tok)))
+                if ts:
+                    ltps[ts] = px
+                    ltps[str(ts).replace("-EQ", "")] = px
+
+        # ---- 3) still missing? single retry, then Yahoo as last resort ----
+        import web_tools
+        for ts, p in pos.items():
+            short = str(ts).replace("-EQ", "")
+            if ltps.get(ts) or ltps.get(short):
+                continue
+            px, src = 0.0, ""
+            tok = p.get("token")
+            if tok:
+                try:
+                    px = float(self.kotak.get_ltps([tok]).get(str(tok)) or 0)
+                    if px:
+                        src = "kotak-retry"
+                except Exception:
+                    px = 0.0
+            if not px:
+                try:
+                    px = float(web_tools.yahoo_prev_close(short)[1] or 0)
+                    if px:
+                        src = "yahoo"
+                except Exception:
+                    px = 0.0
+            if px:
+                log.info("swing LTP for %s resolved via %s: %.2f", ts, src, px)
+                ltps[ts] = px
+                ltps[short] = px
+        self._last_ltps = ltps
+
         rows = []
         for ts, p in pos.items():
             ltp = ltps.get(ts) or ltps.get(str(ts).replace("-EQ", "")) or 0
@@ -254,7 +317,7 @@ class App:
             pct = (100.0 * pnl / inv) if inv else 0.0
             rows.append({"ts": ts, "p": p, "q": int(q), "entry": float(p["entry"]),
                          "ltp": float(ltp or 0), "inv": inv, "val": val,
-                         "pnl": pnl, "pct": pct,
+                         "pnl": pnl, "pct": pct, "ltp_ok": bool(ltp),
                          "source": p.get("source") or ""})
         return rows
 
@@ -263,12 +326,21 @@ class App:
         p = r["p"]
         src = " [auto-scan]" if r["source"] == "scan" else ""
         ltp_s = f"{r['ltp']:.2f}" if r["ltp"] else "?"
+        if r.get("ltp_ok"):
+            val_s = f"  value Rs {r['val']:.2f}"
+            pnl_s = f"  P&L {r['pnl']:+.2f} ({r['pct']:+.2f}%)"
+        else:
+            # A missing price must NEVER be printed as a fake Rs 0.00 / +0.00% -
+            # that reads like "position is worthless" when really we just do not
+            # have a quote yet.
+            val_s = "  value — (LTP nahi mila)"
+            pnl_s = "  P&L — (price pending, position safe hai)"
         return (
             f"SW {r['ts']}: B x{r['q']} @{r['entry']:.2f}{src}\n"
             f"  LTP {ltp_s}\n"
             f"  invested Rs {r['inv']:.2f}\n"
-            f"  value Rs {r['val']:.2f}\n"
-            f"  P&L {r['pnl']:+.2f} ({r['pct']:+.2f}%)\n"
+            f"{val_s}\n"
+            f"{pnl_s}\n"
             f"  SL {p['sl']:.2f} T1 {p['t1px']:.2f} T2 {p['t2px']:.2f} day {p['sessions']}"
         )
 

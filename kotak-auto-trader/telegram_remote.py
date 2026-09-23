@@ -5,6 +5,7 @@ The / list in Telegram is NOT from CommandHandler — it only appears after
 setMyCommands succeeds (Bot API). We publish that list over HTTPS at start.
 """
 import asyncio
+import html as _html
 import json
 import logging
 import os
@@ -72,7 +73,13 @@ BOT_CMDS = [
 
 
 def _split(text: str, lim: int = TG_LIMIT) -> list:
-    """Split long text on newlines so nothing gets cut."""
+    """Split long text on newlines so nothing gets cut.
+
+    Telegram is sent as PLAIN text (no parse_mode), so any HTML entity that
+    slipped into a string ("P&amp;L", "&lt;") would be visible to the user as
+    literal characters. Unescape here so every send path is clean.
+    """
+    text = _html.unescape(text or "")
     if len(text) <= lim:
         return [text]
     parts, cur = [], ""
