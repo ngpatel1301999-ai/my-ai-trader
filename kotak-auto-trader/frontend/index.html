@@ -384,15 +384,24 @@
             }
             data.positions.forEach(pos => {
                 const pnl = Number(pos.pnl || 0);
+                const hasLtp = Number(pos.ltp) > 0;
+                const ccy = pos.ccy ? ' ' + pos.ccy : '';
+                const isComm = pos.type === 'commodity';
+                // commodity rows get a purple badge + the price source, so
+                // "GOLD in USD via Yahoo" is never mistaken for an MCX quote
+                const typeCell = isComm
+                    ? `<span style="background:#7c3aed;color:#fff;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:700">COMM</span>`
+                    : (pos.type || '-');
+                const srcHint = pos.price_src ? ` title="${pos.price_src}"` : '';
                 // data-label drives the mobile card view (see the 640px media
                 // query): on a phone each cell prints its own field name.
-                tbody.innerHTML += `<tr>
+                tbody.innerHTML += `<tr${srcHint}>
                     <td data-label="Symbol">${pos.symbol}</td>
-                    <td data-label="Type">${pos.type || '-'}</td>
+                    <td data-label="Type">${typeCell}</td>
                     <td data-label="Qty">${pos.qty}</td>
-                    <td data-label="Buy Price">${pos.buy_price}</td>
-                    <td data-label="LTP">${pos.ltp || '?'}</td>
-                    <td data-label="P&amp;L" style="color: ${pnl >= 0 ? '#22c55e' : '#ef4444'}; font-weight:700">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}</td>
+                    <td data-label="Buy${ccy}">${pos.buy_price}${ccy}</td>
+                    <td data-label="LTP">${hasLtp ? pos.ltp + ccy : '&mdash;'}</td>
+                    <td data-label="P&amp;L" style="color: ${hasLtp ? (pnl >= 0 ? '#22c55e' : '#ef4444') : '#94a3b8'}; font-weight:700">${hasLtp ? (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ccy : '&mdash;'}</td>
                 </tr>`;
             });
             show(data.error ? data.error : '', false);
