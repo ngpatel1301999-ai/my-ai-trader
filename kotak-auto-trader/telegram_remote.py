@@ -148,6 +148,7 @@ def send_msg_sync(token: str, chat_id: str, text: str):
             async with Bot(token) as b:
                 for i, part in enumerate(_split(text)):
                     head = f"(part {i+1})\n" if i else ""
+                    part = _html.unescape(part)      # never ship "&amp;" to Telegram
                     await b.send_message(chat_id=int(chat_id), text=head + part)
 
         asyncio.run(_go())

@@ -360,7 +360,10 @@
             document.getElementById('tg-state').innerText = d.telegram_connected ? 'listening ✅' : (d.telegram || 'offline ❌');
             document.getElementById('uptime').innerText = fmtUptime(d.uptime_s);
             document.getElementById('build').innerText = d.build || '-';
-            show(d.error ? `Last error: ${d.error}` : '', false);
+            const _msgs = [];
+            if (d.error) _msgs.push(d.error);
+            if (d.kotak_error) _msgs.push('Kotak login: ' + d.kotak_error);
+            show(_msgs.join('  |  '), _msgs.length > 0);
         } catch (err) {
             console.error('status fetch failed', err);
             // A thrown fetch = DNS/offline/CORS, or the container is mid-spin-up.

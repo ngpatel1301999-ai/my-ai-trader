@@ -101,6 +101,12 @@ def extract_ltp(resp, token: str):
     return None
 
 
+def _wait_for_fresh_totp(period: int = 30, margin: float = 3.0) -> float:
+    """Seconds to sleep so the next pyotp.TOTP().now() is a NEW 30s code."""
+    into = time.time() % period
+    return min((period - into) + margin, period + margin)
+
+
 class KotakClient:
     def __init__(self, consumer_key, mobile, ucc, mpin, totp_secret, segment="nse_cm"):
         self.consumer_key = consumer_key
@@ -155,7 +161,11 @@ class KotakClient:
             vt = getattr(cfg, "view_token", None) if cfg else None
             et = getattr(cfg, "edit_token", None) if cfg else None
             if not vt and not et:
-                self.login_error = "server gave no session token (silent reject)"
+                self.login_error = ("server gave no session token (silent reject). "
+                                    "Usual causes: (1) same UCC already logged in "
+                                    "elsewhere - Kotak keeps ONE session, so stop the "
+                                    "other bot / NEO app; (2) a replayed TOTP code; "
+                                    "(3) Kotak blocking data-centre IPs")
                 self.logged_in = False
                 log.error("Kotak login FAILED: %s", self.login_error)
                 return False
@@ -174,7 +184,16 @@ class KotakClient:
         for attempt in (1, 2, 3):
             if self.login():
                 return True
-            time.sleep(5)
+            if attempt < 3:
+                # TOTP codes rotate every 30s. The old code slept 5s and retried,
+                # which resends the SAME code from the same window - Kotak treats
+                # that as a replay and silently rejects it ("server gave no
+                # session token"). Wait for the NEXT window so every attempt
+                # gets a genuinely fresh code.
+                wait = _wait_for_fresh_totp()
+                log.warning("Kotak login attempt %d failed (%s) - waiting %.0fs "
+                            "for a fresh TOTP window", attempt, self.login_error, wait)
+                time.sleep(wait)
         return False
 
     # ---------------- market data ----------------

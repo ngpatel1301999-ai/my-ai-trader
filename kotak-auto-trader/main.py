@@ -2015,6 +2015,8 @@ def get_status():
         "mode": SETTINGS.bot_mode,
         "assistant_mode": bool(_bot is not None and not _bot.universe),
         "kotak_connected": bool(_bot is not None and _bot.universe),
+        "kotak_error": (str(getattr(getattr(_bot, "kotak", None), "login_error", "") or "")
+                        if _bot is not None else ""),
         "telegram_connected": _tg_status()[0],
         "telegram": _tg_status()[1],
         "uptime_s": _uptime_s(),
