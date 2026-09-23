@@ -80,7 +80,9 @@
             <strong>Kotak:</strong> <span id="kotak-state">-</span> &nbsp;|&nbsp;
             <strong>Telegram:</strong> <span id="tg-state">-</span><br>
             <strong>Uptime:</strong> <span id="uptime">-</span> &nbsp;|&nbsp;
-            <strong>Build:</strong> <span id="build">-</span>
+            <strong>Build:</strong> <span id="build">-</span><br>
+            <strong>Backend:</strong> <span id="backend-url"
+                style="font-size:12px;word-break:break-all">-</span>
         </p>
         <button class="btn" onclick="fetchStatus()">Refresh Status</button>
         <button class="btn" onclick="wakeBot()">🔔 Wake Bot</button>
@@ -130,7 +132,33 @@
     // SAME ORIGIN — the dashboard is served by the very server that runs the bot,
     // so relative URLs work on Render, Railway, a VPS and localhost. No CORS,
     // and no hard-coded URL that breaks when the service is renamed.
-    const BACKEND_URL = "";
+    // ---- Which backend does THIS page talk to? ----
+    // Served BY the bot itself (Render / localhost) -> "" (same origin) is right.
+    // Served ANYWHERE ELSE (Vercel, Netlify, GitHub Pages, file://) -> this page's
+    // own origin has no /api/status, so we must point at the Render URL. Getting
+    // this wrong = permanent 404 = dashboard shows "WAKING UP" forever while the
+    // bot is actually perfectly healthy.
+    const RENDER_BACKEND = "https://my-ai-trader-dlxq.onrender.com";
+
+    function detectBackend() {
+        const h = location.hostname;
+        const servedByBot = h.endsWith(".onrender.com") || h.endsWith(".e2b.app")
+            || h === "localhost" || h === "127.0.0.1" || h === "";
+        const strip = (u) => (u || "").replace(/\/+$/, "");
+        // 1) ?backend=... in the URL wins (and is remembered)
+        const q = new URLSearchParams(location.search).get("backend");
+        if (q) {
+            try { localStorage.setItem("BACKEND_URL", strip(q)); } catch (e) {}
+            return strip(q);
+        }
+        // 2) then a previously saved override
+        let saved = null;
+        try { saved = localStorage.getItem("BACKEND_URL"); } catch (e) {}
+        if (saved) return strip(saved);
+        // 3) otherwise auto-detect
+        return servedByBot ? "" : RENDER_BACKEND;
+    }
+    const BACKEND_URL = detectBackend();
 
     function show(text, good) {
         const el = document.getElementById('msg');
@@ -154,6 +182,22 @@
         if (el) { el.innerText = state; el.style.color = color; }
     }
 
+    /** A 404 means this origin has NO backend at all - the page is talking to the
+     *  wrong server (e.g. a Vercel-hosted dashboard calling Vercel's own /api/...).
+     *  That is a CONFIG error, not a sleeping bot. Say so loudly and stop guessing. */
+    function showWrongBackend(code) {
+        const badge = document.getElementById('bot-status');
+        badge.innerText = '❌ WRONG BACKEND';
+        badge.style.background = '#ef4444';
+        badge.style.color = '#fff';
+        kaSet(`backend galat hai - ${code} se ${location.hostname}`, '#ef4444');
+        const where = BACKEND_URL || location.origin;
+        show(`Ye page ${location.origin} se load hua hai, par API ${where} par mil rahi ` +
+             `hai jo ${code} de raha hai. Bot shayad bilkul theek chal raha hai! Fix: ` +
+             `${RENDER_BACKEND}/ khole (Render khud ye dashboard serve karta hai), ya is ` +
+             `page par ?backend=${RENDER_BACKEND} laga de.`, true);
+    }
+
     /** Render's free plan answers with an HTML "loading" page (502/503) while a
      *  service spins up, so res.json() throws. That is NOT a crash - it means
      *  "waking up, wait ~1 minute". Tell the user that instead of a red ERROR. */
@@ -173,8 +217,8 @@
             kaSet(`no response after ${Math.round(failCount * 20 / 60)} min - Render dashboard dekho`, '#ef4444');
             show('Bot 3+ minute se jawab nahi de raha. Render dashboard me Logs/Error kholo - deploy fail hua ho sakta hai.', true);
         }
-        // keep hammering so the spin-up completes
-        setTimeout(fetchStatus, 20000);
+        // NOTE: do NOT setTimeout(fetchStatus) here - the 20s setInterval already
+        // retries. Adding another timer doubles the ping chain every failure.
     }
 
     async function wakeBot() {
@@ -189,10 +233,15 @@
         const badge = document.getElementById('bot-status');
         try {
             const res = await fetch(`${BACKEND_URL}/api/status`, { cache: 'no-store' });
-            if (!res.ok) { showWaking(); return; }   // 502/503 = Render spin-up page
+            // 404/405 = wrong origin entirely (config bug). 502/503 = Render is
+            // spinning the container up. They need completely different messages.
+            if (res.status === 404 || res.status === 405 || res.status === 400) {
+                showWrongBackend(res.status); return;
+            }
+            if (!res.ok) { showWaking(); return; }    // 502/503 = Render spin-up page
             let d;
             try { d = await res.json(); }
-            catch (e) { showWaking(); return; }       // HTML loading page, not JSON
+            catch (e) { showWaking(); return; }        // HTML loading page, not JSON
             failCount = 0;
             lastPing = new Date();
             kaSet('ACTIVE - ye tab bot ko jaaga rakha hai ✅', '#22c55e');
@@ -210,7 +259,8 @@
             show(d.error ? `Last error: ${d.error}` : '', false);
         } catch (err) {
             console.error('status fetch failed', err);
-            showWaking();          // network error = asleep, not broken
+            // A thrown fetch = DNS/offline/CORS, or the container is mid-spin-up.
+            showWaking();
         }
     }
 
@@ -277,6 +327,15 @@
     }
 
     window.onload = () => {
+        const bu = document.getElementById('backend-url');
+        if (bu) {
+            bu.innerText = BACKEND_URL || `${location.origin} (same origin)`;
+            // if we are NOT talking to Render, warn immediately - before any fetch
+            if (BACKEND_URL && !BACKEND_URL.includes('onrender.com')) {
+                bu.style.color = '#f59e0b';
+                bu.innerText += '  ⚠️ Render nahi hai!';
+            }
+        }
         fetchStatus(); fetchPositions();
         // This 20s poll IS the keep-alive: every /api/status hit counts as
         // inbound traffic, so Render never reaches its 15-minute idle timeout.
