@@ -43,6 +43,13 @@ NSE_TOKENS = {
 }
 VERIFIED_FILE = paths.data_path("tokens_verified.json")
 FALLBACK_TTL = 30  # seconds: reuse delayed-feed prices within this window
+# Kotak rate-limits historical-data (~3 req/sec + a daily cap). The quotes
+# endpoint drops some tokens, so each of them falls back to history — fired
+# back-to-back that trips HTTP 429 "Rate limit exceeded". Space the calls out
+# and back off hard after a 429 instead of hammering.
+HIST_MIN_GAP = 0.4       # seconds between two historical-data calls
+RATE_LIMIT_PAUSE = 8.0   # seconds to wait after Kotak says 429
+RATE_LIMIT_MAX = 30.0    # never sleep longer than this in one go
 
 
 def _walk(obj, keys_wanted):
@@ -108,6 +115,8 @@ class KotakClient:
         self.last_login_resp = {}
         self._fb_cache = {}  # token -> (price, timestamp)
         self._fb_warned = 0.0
+        self._last_hist = 0.0          # when we last hit historical-data
+        self._rate_limited_until = 0.0 # don't call Kotak before this time
 
     def login(self) -> bool:
         """Daily login: TOTP + MPIN. The SDK RETURNS error dicts instead of
@@ -216,31 +225,80 @@ class KotakClient:
                     out[tok] = px
         return out
 
+    def _throttle(self):
+        """Wait until it is polite to call Kotak again. Blocks the caller
+        (always a background thread — never the web request loop)."""
+        wait = self._rate_limited_until - time.time()
+        if wait > 0:
+            time.sleep(min(wait, RATE_LIMIT_MAX))
+        gap = time.time() - self._last_hist
+        if gap < HIST_MIN_GAP:
+            time.sleep(HIST_MIN_GAP - gap)
+        self._last_hist = time.time()
+
+    @staticmethod
+    def _is_rate_limited(resp) -> bool:
+        """Kotak's SDK RETURNS error dicts instead of raising, so a 429 shows
+        up as a normal-looking response. Catch it or we fire the next call too.
+        Accepts a dict (normal) or a string (from an exception message)."""
+        try:
+            if isinstance(resp, dict):
+                blob = " ".join(str(resp.get(k, "")) for k in
+                                ("code", "status", "error", "message", "reason"))
+            else:
+                blob = str(resp or "")
+            low = blob.lower()
+            return ("429" in blob or "rate limit" in low or "too many" in low
+                    or "ratelimit" in low)
+        except Exception:
+            return False
+
+    def _note_rate_limit(self, token: str, where: str):
+        self._rate_limited_until = time.time() + RATE_LIMIT_PAUSE
+        if time.time() - self._fb_warned > 300:
+            self._fb_warned = time.time()
+            log.warning("Kotak 429 rate limit on %s (%s) - backing off %.0fs. "
+                        "Prices stay delayed/sparse for a bit; nothing is broken.",
+                        token, where, RATE_LIMIT_PAUSE)
+
     def _ltp_via_history(self, token: str, segment: str = "nse_cm"):
         """LTP proxy: today's last 1-min close, else last daily close."""
         now = time.time()
         hit = self._fb_cache.get(str(token))
         if hit and now - hit[1] < FALLBACK_TTL:
             return hit[0]
+        if time.time() < self._rate_limited_until:
+            return hit[0] if hit else None   # cooling down: reuse stale price
         px = None
         try:
             today = datetime.now().strftime("%Y-%m-%d")
+            self._throttle()
             resp = self._plain_client().historical_data(
                 neosymbol=f"{segment}|{token}", interval="1min",
                 from_date=today, to_date=today)
+            if self._is_rate_limited(resp):
+                self._note_rate_limit(token, "1min")
+                return hit[0] if hit else None
             rows = (resp.get("data", {}) or {}).get("candles", [])
             if rows:
                 px = float(rows[-1][4])
             else:  # market closed / no today data -> last daily close
+                self._throttle()
                 resp = self._plain_client().historical_data(
                     neosymbol=f"{segment}|{token}", interval="D",
                     from_date=(datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d"),
                     to_date=today)
+                if self._is_rate_limited(resp):
+                    self._note_rate_limit(token, "daily")
+                    return hit[0] if hit else None
                 rows = (resp.get("data", {}) or {}).get("candles", [])
                 if rows:
                     px = float(rows[-1][4])
         except Exception as e:
-            log.warning("history feed failed for %s: %s", token, str(e)[:120])
+            if self._is_rate_limited(str(e)):
+                self._note_rate_limit(token, "exception")
+            else:
+                log.warning("history feed failed for %s: %s", token, str(e)[:120])
         if px:
             self._fb_cache[str(token)] = (px, now)
         return px
