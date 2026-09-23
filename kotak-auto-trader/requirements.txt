@@ -3,4 +3,5 @@ python-telegram-bot>=21,<23
 pyotp
 python-dotenv
 pandas
-
+fastapi
+uvicorn

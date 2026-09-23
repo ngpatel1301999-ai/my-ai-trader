@@ -11,6 +11,57 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import threading
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# FastAPI instance
+web_app = FastAPI()
+
+# HTML file ko access allow karne ke liye (CORS)
+web_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global app variable (jahan aapka trading logic hai)
+bot_app = None 
+
+@web_app.get("/api/status")
+def get_status():
+    return {
+        "status": "online",
+        "paper_trading": getattr(bot_app, "is_paper", True)
+    }
+
+@web_app.get("/api/positions")
+def get_positions():
+    # Kotak API ya paper book se positions return karein
+    if bot_app and hasattr(bot_app, "kotak"):
+        try:
+            positions = bot_app.kotak.get_positions()
+            return {"positions": positions}
+        except Exception as e:
+            return {"positions": [], "error": str(e)}
+    return {"positions": []}
+
+def run_trading_bot():
+    global bot_app
+    bot_app = App()
+    bot_app.run() # Aapka main loop
+
+if __name__ == "__main__":
+    # 1. Trading Bot ko Background Thread me chalayein
+    bot_thread = threading.Thread(target=run_trading_bot, daemon=True)
+    bot_thread.start()
+
+    # 2. Web API Server ko Main Thread me chalayein
+    uvicorn.run(web_app, host="0.0.0.0", port=10000)
+
 # Windows console (cp1252) cannot print emoji -> force UTF-8 so logs never crash
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
