@@ -138,6 +138,33 @@ def publish_bot_commands(token: str, chat_id: str = "") -> str:
         return f"fail {e}"
 
 
+def _run_async(coro_factory):
+    """asyncio.run() that ALSO works when called from inside a running loop.
+
+    Telegram handlers / FastAPI endpoints already run an event loop; a plain
+    asyncio.run() there raises and the message silently never sends. In that
+    case we hop to a short-lived thread with its own loop and wait for it.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro_factory())
+    out = {}
+
+    def _th():
+        try:
+            out["r"] = asyncio.run(coro_factory())
+        except Exception as e:  # noqa: BLE001 - re-raised to the caller
+            out["e"] = e
+
+    t = threading.Thread(target=_th, daemon=True, name="tg-send")
+    t.start()
+    t.join(45)
+    if "e" in out:
+        raise out["e"]
+    return out.get("r")
+
+
 def send_msg_sync(token: str, chat_id: str, text: str):
     if not token or "PASTE" in token or not chat_id:
         return
@@ -156,7 +183,7 @@ def send_msg_sync(token: str, chat_id: str, text: str):
                     log.info("TG SEND %d/%d %r", i + 1, len(parts), part[:70])
                     await b.send_message(chat_id=int(chat_id), text=head + part)
 
-        asyncio.run(_go())
+        _run_async(_go)
     except Exception as e:
         log.warning("telegram send failed: %s", e)
 
@@ -174,7 +201,7 @@ def send_buttons_sync(token: str, chat_id: str, text: str, pid: int):
                 await b.send_message(chat_id=int(chat_id), text=text[:1000],
                                      reply_markup=kb)
 
-        asyncio.run(_go())
+        _run_async(_go)
     except Exception as e:
         log.warning("telegram buttons failed: %s", e)
 
@@ -188,7 +215,9 @@ class TelegramRemote(threading.Thread):
         self.chat_id = str(chat_id)
         self.app = app
         self.ready = threading.Event()
-        self._stop = threading.Event()  # set by stop() -> ends the polling loop
+        self._stop_flag = threading.Event()  # set by stop() -> ends the polling loop
+        # NOTE: never name this `_stop` - CPython 3.12's threading.Thread has an
+        # internal _stop() method; shadowing it breaks join()/is_alive().
         self.stopped = False            # True once shutdown has completed
         self._last_conflict_log = 0.0   # log a Conflict once per 5 min, not per poll
         # "" while healthy. Set when polling dies or the token/chat id is missing,
@@ -203,8 +232,8 @@ class TelegramRemote(threading.Thread):
         KEEPS ANSWERING MESSAGES - so the dashboard says "Bot stopped" while
         Telegram still replies. Returns True once the thread has really exited.
         """
-        already = self._stop.is_set()
-        self._stop.set()
+        already = self._stop_flag.is_set()
+        self._stop_flag.set()
         if not already:
             log.info("Telegram remote: stop requested")
         if threading.current_thread() is not self and self.is_alive():
@@ -353,16 +382,22 @@ class TelegramRemote(threading.Thread):
         async def slash(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if not await guard(update):
                 return
-            raw = update.message.text or ""
+            msg = update.effective_message          # edited msgs: .message is None!
+            if msg is None or not msg.text:
+                return
+            raw = msg.text or ""
             if TelegramRemote._is_slow(raw):
-                await with_thinking(update.message, lambda: app.cmd_slash(raw))
+                await with_thinking(msg, lambda: app.cmd_slash(raw))
             else:
-                await reply_long(update.message, app.cmd_slash(raw))
+                await reply_long(msg, app.cmd_slash(raw))
 
         async def chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if not await guard(update):
                 return
-            raw = update.message.text or ""
+            msg = update.effective_message
+            if msg is None or not msg.text:
+                return
+            raw = msg.text or ""
 
             def work():
                 fast = app.cmd_chat_route(raw)
@@ -371,13 +406,13 @@ class TelegramRemote(threading.Thread):
                 return app.ai_handle(raw)
 
             if TelegramRemote._is_slow(raw):
-                await with_thinking(update.message, work)
+                await with_thinking(msg, work)
                 return
             fast = app.cmd_chat_route(raw)
             if fast is not None:
-                await reply_long(update.message, fast)
+                await reply_long(msg, fast)
                 return
-            await with_thinking(update.message, lambda: app.ai_handle(raw))
+            await with_thinking(msg, lambda: app.ai_handle(raw))
 
         async def button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             q = update.callback_query
@@ -453,7 +488,7 @@ class TelegramRemote(threading.Thread):
             # `await asyncio.Event().wait()` - an infinite wait that NOTHING
             # could ever cancel, which is exactly why "Stop Bot" left Telegram
             # answering messages while the dashboard reported "stopped".
-            while not self._stop.is_set():
+            while not self._stop_flag.is_set():
                 await asyncio.sleep(0.5)
             log.info("Telegram remote: closing polling...")
             try:
