@@ -2009,7 +2009,11 @@ def _tg_status() -> tuple:
     """(connected, human text). Never claims green next to a dead poller."""
     if _tg is None:
         return False, "not started"
-    ev = getattr(_tg, "_stop", None)
+    # NOTE: `_stop_flag`, never `_stop` - on Python 3.12 `Thread._stop` is an
+    # internal METHOD, so getattr would hand us a function, not the Event.
+    ev = getattr(_tg, "_stop_flag", None)
+    if not isinstance(ev, threading.Event):
+        ev = None
     if getattr(_tg, "stopped", False) or (ev is not None and ev.is_set()):
         return False, "stopped (polling closed)"
     err = str(getattr(_tg, "error", "") or "")
