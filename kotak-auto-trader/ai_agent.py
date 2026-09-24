@@ -168,6 +168,21 @@ class Agent:
                                            "news", "headline", "why is",
                                            "what happened", "swing"))):
             return self._research(text, context)
+        # Plain ticker alone or "RELIANCE price" / "hero moto" -> Kotak Neo preferred (user demanded)
+        # User said: any share name or price query should use Kotak, not Google
+        sym_plain = self._pick_symbol(text)
+        if sym_plain and sym_plain not in web_tools._SKIP_TICKER:
+            # short query (1-4 words) that looks like just a stock + optional price words
+            if len(text.split()) <= 4 and (
+                low.strip() == sym_plain.lower()
+                or low.strip() in (sym_plain.lower() + " price", sym_plain.lower() + " share price", "price of " + sym_plain.lower(), sym_plain.lower() + " ltp", sym_plain.lower() + " cmp")
+                or re.search(r"\b(price|ltp|cmp|rate|value|share price|stock price)\b", low)
+                or len(text.split()) <= 2
+            ):
+                return self._research(text, context)
+            # also if text is just 1-2 words and contains a valid NSE ticker, research it
+            if len(text.split()) <= 2 and sym_plain:
+                return self._research(text, context)
 
         # Default: Google / Redmi / any topic = live facts. Never WRITEUP.
         return self._general(text)

@@ -181,26 +181,38 @@ class App:
         raw = (text or "").strip()
         # /watchlist  or /watchlist add HEROMOTOCO  or natural "add X to watchlist"
         low = raw.lower()
-        # show list
+        # show list — numbered as user asked: 1 NAME :- Rs price
         if not low or low in ("show","list","watchlist","/watchlist","watch list") or low.strip() in ("show watchlist","watchlist show","/watchlist show","show watch list") or (_re.search(r"\b(show|list|display|view)\b", low) and not _re.search(r"\b(add|put|include|insert|remove|delete|rm)\b", low)):
             syms = self.get_watchlist_symbols()
-            lines = [f"📋 WATCHLIST ({len(syms)}): " + ", ".join(syms)]
-            # add live price snippet for first 10
+            lines = [f"📋 WATCHLIST ({len(syms)}) — Kotak Neo live:"]
+            # Kotak live prices for all (user wants Kotak, not Yahoo)
             try:
                 toks = []
-                for s in syms[:10]:
+                for s in syms:
                     ts, tok = self.short_to_trading(s)
                     if tok:
                         toks.append(tok)
-                if toks:
-                    ltps = self.kotak.get_ltps(toks) or {}
-                    for s in syms[:10]:
-                        ts, tok = self.short_to_trading(s)
-                        px = ltps.get(tok) if tok else None
-                        if px:
-                            lines.append(f"  {s}: Rs {px:.2f}")
+                ltps = self.kotak.get_ltps(toks) or {} if toks else {}
+                for idx, s in enumerate(syms, 1):
+                    ts, tok = self.short_to_trading(s)
+                    px = ltps.get(tok) if tok else None
+                    if px:
+                        lines.append(f"{idx} {s} :- Rs {px:.2f}")
+                    else:
+                        # fallback try Yahoo with label if Kotak fails
+                        try:
+                            import web_tools as _wt
+                            _, last = _wt.yahoo_prev_close(s)
+                            if last:
+                                lines.append(f"{idx} {s} :- Rs {last:.2f} (Yahoo fallback)")
+                            else:
+                                lines.append(f"{idx} {s} :- price unavailable")
+                        except Exception:
+                            lines.append(f"{idx} {s} :- price unavailable")
             except Exception:
-                pass
+                for idx, s in enumerate(syms, 1):
+                    lines.append(f"{idx} {s} :- price unavailable")
+            lines.append("")
             lines.append("Add: /watchlist add HEROMOTOCO  or  'add hdfcbank to watchlist'")
             lines.append("Remove: /watchlist remove INFY")
             return "\n".join(lines)
@@ -752,23 +764,34 @@ class App:
         return self.swing.modify_levels(sym, sl=sl, t1=t1, t2=t2)
 
     def cmd_quote(self, short: str) -> str:
+        """Kotak Neo is PRIMARY price source for equity. Yahoo is fallback only."""
         short = (short or "").upper().replace("-EQ", "").strip()
         if not short or short in ("LTP", "CMP", "QUOTE", "QTY"):
             return "Which stock? Example: LTP of SBIN"
-        ts, tok = self.short_to_trading(short) if self.universe else (None, None)
+        # ALWAYS try Kotak first, even if universe is empty (live search)
+        try:
+            ts, tok = self.short_to_trading(short)
+        except Exception:
+            ts, tok = None, None
         if tok:
-            px = self.kotak.get_ltps([tok]).get(tok)
-            if px:
-                self.last_symbol = short
-                return f"{ts}: Rs {px:.2f}"
+            try:
+                px = self.kotak.get_ltps([tok]).get(tok)
+                if px:
+                    self.last_symbol = short
+                    return f"{ts}: Rs {px:.2f} (Kotak Neo live)"
+            except Exception as e:
+                log.warning("Kotak LTP failed for %s: %s", short, e)
+        # Fallback to Yahoo only if Kotak unavailable, clearly labelled
         try:
             import web_tools
             _prev, last = web_tools.yahoo_prev_close(short)
             if last:
                 self.last_symbol = short
-                return f"{short}: Rs {last:.2f}"
+                return f"{short}: Rs {last:.2f} (Yahoo fallback — Kotak unavailable)"
         except Exception:
             pass
+        if not self.universe:
+            return f"🔌 Kotak not connected yet — can't fetch live LTP for {short}. Try again after Kotak connects, or check symbol."
         return f"Can't find {short}."
 
     def cmd_open_pnl(self) -> str:
@@ -1185,11 +1208,12 @@ class App:
                 and any(w in low for w in ("support", "target", "sl", "t1", "t2",
                                            "strategy", "setup", "level"))):
             return self.cmd_sid_levels(raw)
-        if _re.search(r"\b(ltp|cmp|quote)\b", low):
-            cleaned = _re.sub(r"\b(ltp|cmp|quote|price|of|the|please|what|is|now)\b",
+        # LTP / price queries — Kotak Neo is primary (user demanded)
+        if _re.search(r"\b(ltp|cmp|quote|price|rate|value)\b", low) or _re.search(r"\b(share\s*price|stock\s*price)\b", low):
+            cleaned = _re.sub(r"\b(ltp|cmp|quote|price|rate|value|of|the|please|what|is|now|current|live|today)\b",
                               " ", raw, flags=_re.I)
             sym = web_tools.extract_nse_symbol(raw)
-            if not sym or sym in ("LTP", "CMP", "QUOTE"):
+            if not sym or sym in ("LTP", "CMP", "QUOTE", "PRICE", "RATE", "VALUE"):
                 sym = web_tools.extract_nse_symbol(cleaned)
             if not sym:
                 import universe
@@ -1198,6 +1222,25 @@ class App:
             if not sym:
                 return "Which stock? Example: LTP of SBIN"
             return self.cmd_quote(sym)
+        # Plain symbol / company name alone (e.g. "RELIANCE", "HDFC", "hero moto") — treat as Kotak LTP request
+        # This covers user's demand: any share name typed should search Kotak Neo
+        if len(raw.split()) <= 4 and not _re.search(r"\b(buy|sell|task|scan|research|news|headline|why|what|who|weather|nifty|sensex|market)\b", low):
+            sym = web_tools.extract_nse_symbol(raw)
+            if sym and sym not in ("LTP", "CMP", "QUOTE", "PRICE", "BUY", "SELL"):
+                try:
+                    from commodity import SPECS as _CS
+                    if sym in _CS:
+                        return None
+                except Exception:
+                    pass
+                return self.cmd_quote(sym)
+            import universe as _uv
+            hits = _uv.find(raw, 1)
+            if hits and len(raw.strip()) >= 2:
+                cand = hits[0]["symbol"]
+                if len(raw.split()) <= 3 and cand:
+                    if cand.lower() not in ("the", "and"):
+                        return self.cmd_quote(cand)
         return None
 
     # ---------------- AI ----------------
@@ -2032,13 +2075,18 @@ def loop(app_obj: "App"):
                     and not past(now, SETTINGS.hard_stop)):
                 app_obj.swing.last_scan = now.date()
                 app_obj.swing.eod_scan()
-            # EOD summary
+            # EOD summary — kept in logs/dashboard only, NOT Telegram (user asked to hide)
             if past(now, SETTINGS.hard_stop) and not eod_sent:
                 eod_sent = True
                 if SETTINGS.intraday_on and not app_obj.intra.squared_today:
                     app_obj.intra.squared_today = True
+                    # squareoff still needs to be announced (risk), keep it
                     app_obj.alert("\u23f0 " + app_obj.intra.squareoff_all("HARD STOP"))
-                app_obj.alert(app_obj.cmd_eod())
+                # EOD portfolio dump is for dashboard/logs, not Telegram spam
+                try:
+                    log.info("EOD summary (Telegram hidden):\n%s", app_obj.cmd_eod())
+                except Exception:
+                    pass
             if getattr(app_obj, "comm", None):
                 if time.time() - last_guard >= 30:
                     last_guard = time.time()
