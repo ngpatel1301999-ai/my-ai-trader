@@ -131,19 +131,56 @@ def find(query: str, limit: int = 15) -> list:
                 out.append(r)
             return out[:limit]
     rows = load()
-    hits = []
+    # scored ranking — not insertion order (fixes BOSCHLTD beating HEROMOTOCO on 'hero motor ltd')
+    toks = [t for t in re.split(r"[^a-z0-9]+", q) if len(t) > 2]
+    # down-weight generic suffixes that match many symbols
+    GENERIC = {"motor","motors","moto","ltd","limited","bank","banks","steel","power","energy","india","ltd."}
+    scored = []
     for r in rows:
-        blob = (r.get("symbol", "") + " " + r.get("name", "")).lower()
-        if q in blob or r.get("symbol", "").lower() == q:
-            hits.append(r)
-    if not hits:
-        # fuzzy-ish: all tokens
-        toks = [t for t in re.split(r"[^a-z0-9]+", q) if len(t) > 2]
-        for r in rows:
-            blob = (r.get("symbol", "") + " " + r.get("name", "")).lower()
-            if any(t in blob for t in toks):
-                hits.append(r)
-    return hits[:limit]
+        sym = (r.get("symbol") or "").lower()
+        name = (r.get("name") or "").lower()
+        blob = sym + " " + name
+        score = 0
+        if sym == q:
+            score += 500
+        if q in blob:
+            score += 100 + min(len(q), 20)
+            if sym == q:
+                score += 200
+        for tt in toks:
+            w = 1.0
+            if tt in GENERIC:
+                w = 0.5
+            elif len(tt) >= 4 and tt not in ("hero","bosch","hdfc","reliance","tata","infosys","tcs"):
+                # keep 1.0, but rare brands like hero/bosch keep full weight; generic already halved
+                pass
+            if tt in blob:
+                if re.search(r"(?<![a-z])" + re.escape(tt) + r"(?![a-z])", blob):
+                    score += len(tt) * 4 * w
+                else:
+                    score += len(tt) * w
+            else:
+                if len(tt) >= 4:
+                    for wrd in re.findall(r"[a-z0-9]+", blob):
+                        if len(wrd) >= 4 and sum(a != b for a, b in zip(tt, wrd)) <= 1 and abs(len(tt) - len(wrd)) <= 1 and tt[:3] == wrd[:3]:
+                            score += 2 * w
+                            break
+        for tt in toks:
+            if len(tt) >= 3 and tt in sym:
+                score += len(tt) * 2 * (0.5 if tt in GENERIC else 1)
+        # brand prefix bonus: "hero ..." should prefer HEROMOTOCO over TVSMOTOR
+        if toks and sym.startswith(toks[0]) and len(toks[0]) >= 3:
+            score += 25
+        if score > 0:
+            scored.append((score, r))
+    if scored:
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in scored[:limit]]
+    import difflib
+    pool = [r["symbol"] for r in rows]
+    close = difflib.get_close_matches(q.upper(), pool, n=limit, cutoff=0.55)
+    by = {r["symbol"]: r for r in rows}
+    return [by[s] for s in close if s in by]
 
 
 def resolve_scan(query: str, watchlist: list) -> tuple:

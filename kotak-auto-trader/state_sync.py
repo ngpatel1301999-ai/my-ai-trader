@@ -44,7 +44,8 @@ QUIET = 5.0       # wait a few s after a save before pushing (batch writes)
 
 # files that make up the trading book
 STATE_FILES = ["swing_positions.json", "commodity_positions.json",
-               "tasks.json", "commodity_tasks.json", "swing_trades.csv"]
+               "tasks.json", "commodity_tasks.json", "swing_trades.csv",
+               "watchlist.json"]
 
 _mongo_client = None
 

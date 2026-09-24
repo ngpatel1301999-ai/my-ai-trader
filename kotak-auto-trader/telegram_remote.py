@@ -74,6 +74,7 @@ BOT_CMDS = [
     ("squareoff", "Square off ALL equity"),
     ("squareoff_commodity", "Square off commodity paper"),
     ("sl", "Update equity SL: sl SBIN 985"),
+    ("watchlist", "Show / add / remove watchlist"),
 ]
 
 

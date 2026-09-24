@@ -127,23 +127,176 @@ class App:
         self.swing = SwingEngine(self)
         self.comm = CommodityBook(self.kotak)
         self.last_symbol = ""
+        # dynamic watchlist (file > env) — survives restarts via state_sync/mongo
+        self._watchlist_cache = None
+
+    # ---------------- watchlist (dynamic, survives restarts) ----------------
+    def _watchlist_file(self) -> str:
+        return paths.data_path("watchlist.json")
+
+    def _load_watchlist_symbols(self) -> list:
+        import json as _j
+        fp = self._watchlist_file()
+        # file wins (edited via Telegram /watchlist add)
+        if os.path.exists(fp):
+            try:
+                data = _j.load(open(fp))
+                if isinstance(data, list) and data:
+                    return [str(s).upper().replace("-EQ","").strip() for s in data if str(s).strip()]
+            except Exception as e:
+                log.warning("watchlist load: %s", e)
+        # fallback: env WATCHLIST
+        return [w["symbol"] for w in SETTINGS.watchlist]
+
+    def _save_watchlist_symbols(self, syms: list) -> str:
+        import json as _j
+        fp = self._watchlist_file()
+        uniq = []
+        seen = set()
+        for s in syms:
+            u = str(s).upper().replace("-EQ","").strip()
+            if u and u not in seen:
+                seen.add(u)
+                uniq.append(u)
+        try:
+            _j.dump(uniq, open(fp, "w"), indent=1)
+            import state_sync
+            state_sync.mark("watchlist.json")
+        except Exception as e:
+            log.warning("watchlist save: %s", e)
+            return f"Save failed: {e}"
+        self._watchlist_cache = uniq
+        return ""
+
+    def get_watchlist_symbols(self) -> list:
+        if self._watchlist_cache is not None:
+            return list(self._watchlist_cache)
+        syms = self._load_watchlist_symbols()
+        self._watchlist_cache = syms
+        return list(syms)
+
+    def cmd_watchlist(self, text: str = "") -> str:
+        import re as _re
+        import web_tools, universe
+        raw = (text or "").strip()
+        # /watchlist  or /watchlist add HEROMOTOCO  or natural "add X to watchlist"
+        low = raw.lower()
+        # show list
+        if not low or low in ("show","list","watchlist","/watchlist","watch list") or low.strip() in ("show watchlist","watchlist show","/watchlist show","show watch list") or (_re.search(r"\b(show|list|display|view)\b", low) and not _re.search(r"\b(add|put|include|insert|remove|delete|rm)\b", low)):
+            syms = self.get_watchlist_symbols()
+            lines = [f"📋 WATCHLIST ({len(syms)}): " + ", ".join(syms)]
+            # add live price snippet for first 10
+            try:
+                toks = []
+                for s in syms[:10]:
+                    ts, tok = self.short_to_trading(s)
+                    if tok:
+                        toks.append(tok)
+                if toks:
+                    ltps = self.kotak.get_ltps(toks) or {}
+                    for s in syms[:10]:
+                        ts, tok = self.short_to_trading(s)
+                        px = ltps.get(tok) if tok else None
+                        if px:
+                            lines.append(f"  {s}: Rs {px:.2f}")
+            except Exception:
+                pass
+            lines.append("Add: /watchlist add HEROMOTOCO  or  'add hdfcbank to watchlist'")
+            lines.append("Remove: /watchlist remove INFY")
+            return "\n".join(lines)
+        # parse add/remove
+        m_add = _re.search(r"\badd\b\s*([a-z0-9 &.,/-]+)", low)
+        m_rm  = _re.search(r"\b(remove|delete|rm)\b\s*([a-z0-9 &.,/-]+)", low)
+        target = None
+        op = None
+        if m_add and ("watchlist" in low or raw.strip().lower().startswith("/watchlist")):
+            op = "add"
+            target = m_add.group(1)
+            # strip trailing 'to watchlist'
+            target = _re.sub(r"\b(to|in)?\s*watchlist\b", "", target, flags=_re.I).strip(" ,.")
+        elif m_rm:
+            op = "remove"
+            target = m_rm.group(2)
+            target = _re.sub(r"\b(from)?\s*watchlist\b", "", target, flags=_re.I).strip(" ,.")
+        elif _re.search(r"\bwatchlist\b", low):
+            # fallback: try to extract symbol anywhere
+            target = _re.sub(r".*?watchlist", "", low).strip(" :,-")
+            op = "add" if target else None
+        if op and target:
+            # extract NSE symbol from the WHOLE phrase (robust for hinglish orderings)
+            # e.g. "hdfcbank watchlist add" -> raw contains HDFCBANK, not just "add"
+            sym = web_tools.extract_nse_symbol(raw) or web_tools.extract_nse_symbol(raw.upper())
+            if not sym or sym in ("LTP","CMP","QTY","ADD","WATCHLIST","WATCH","LIST"):
+                # try cleaned target, then full raw via universe
+                sym2 = web_tools.extract_nse_symbol(target) or web_tools.extract_nse_symbol(target.upper())
+                if sym2 and sym2 not in ("LTP","CMP","QTY","ADD","WATCHLIST"):
+                    sym = sym2
+                else:
+                    hits = universe.find(raw, 1)
+                    # avoid bogus "ADD" hit when query is just "add"
+                    if hits and hits[0]["symbol"] not in ("ADD",):
+                        sym = hits[0]["symbol"]
+                    else:
+                        hits2 = universe.find(target, 1)
+                        sym = hits2[0]["symbol"] if hits2 else ""
+                    if not sym:
+                        # last resort: first token that looks like symbol
+                        import re as _re2
+                        cand = _re2.findall(r"[A-Za-z]{2,12}", raw)
+                        for c in cand:
+                            cu = c.upper()
+                            if cu not in ("ADD","WATCHLIST","WATCH","LIST","TO","IN","STOCK","PLEASE","KARU","ME","ADD","KO","MEIN","KARO"):
+                                sym = cu
+                                break
+            sym = sym.upper().replace("-EQ","").strip()
+            if not sym or len(sym) < 2:
+                return "Which stock? Example: /watchlist add HEROMOTOCO"
+            syms = self.get_watchlist_symbols()
+            if op == "add":
+                if sym in syms:
+                    return f"{sym} already in watchlist.\n" + self.cmd_watchlist("")
+                syms.append(sym)
+                err = self._save_watchlist_symbols(syms)
+                if err:
+                    return err
+                # try to resolve token immediately
+                try:
+                    self.resolve_universe()
+                except Exception:
+                    pass
+                return f"✅ Added {sym} to watchlist.\n" + self.cmd_watchlist("")
+            else:
+                if sym not in syms:
+                    return f"{sym} not in watchlist.\n" + self.cmd_watchlist("")
+                syms = [s for s in syms if s != sym]
+                err = self._save_watchlist_symbols(syms)
+                if err:
+                    return err
+                # keep universe as-is (token stays until restart, no harm)
+                return f"🗑️ Removed {sym} from watchlist.\n" + self.cmd_watchlist("")
+        return self.cmd_watchlist("")
 
     # ---------------- universe (auto token search, retry-safe) ----------------
     def resolve_universe(self):
+        # dynamic file > env
+        wl_syms = self.get_watchlist_symbols()
+        # map env legacy entries that had tokens (rare)
+        env_tok = {w["symbol"]: w for w in SETTINGS.watchlist if w.get("token")}
         done = {u["symbol"] for u in self.universe}
-        for w in SETTINGS.watchlist:
-            if w["symbol"] in done:
+        for sym in wl_syms:
+            if sym in done:
                 continue
-            if w.get("token"):
+            w = env_tok.get(sym)
+            if w and w.get("token"):
                 self.universe.append({"symbol": w["symbol"], "trading": w["trading"],
                                       "token": w["token"]})
                 continue
-            ts, tok = self.kotak.search_token(w["symbol"])
+            ts, tok = self.kotak.search_token(sym)
             if ts and tok:
-                log.info("Resolved %s -> %s (%s)", w["symbol"], ts, tok)
-                self.universe.append({"symbol": w["symbol"], "trading": ts, "token": tok})
+                log.info("Resolved %s -> %s (%s)", sym, ts, tok)
+                self.universe.append({"symbol": sym, "trading": ts, "token": tok})
             else:
-                log.warning("Could not resolve %s — skipped", w["symbol"])
+                log.warning("Could not resolve %s — skipped", sym)
         self.tok2sym = {u["token"]: u["trading"] for u in self.universe}
 
     def short_to_trading(self, short: str):
@@ -168,6 +321,7 @@ class App:
                 "  /scan_commodity /scan_currency /scan_crypto /tasks_commodity\n"
                 "/buy RELIANCE 5  /buy GOLD 1  /sell SBIN  /sell GOLD\n"
                 "/squareoff_commodity   /sl SBIN 985\n"
+                "/watchlist  /watchlist add HEROMOTOCO  /watchlist remove INFY\n"
                 "AVERAGING: holding me dobara buy = avg price + SL/T1/T2 auto-adjust\n"
                 "  e.g. Buy 50 more IDEA | /buy GOLD 2 (jab GOLD pehle se held ho)\n"
                 "PARTIAL EXIT: held qty ka kuch hissa becho, baaki held rahega\n"
@@ -960,6 +1114,8 @@ class App:
             if is_comm or pick_commodity(raw):
                 return self.cmd_commodity_msg(raw)
             return self.cmd_chat_trade(raw)
+        if cmd in ("watchlist", "watch"):
+            return self.cmd_watchlist(raw)
         return self.cmd_help()
 
     def cmd_chat_route(self, text: str):
@@ -973,6 +1129,9 @@ class App:
             return None
         if raw.startswith("/"):
             return self.cmd_slash(raw)
+        # watchlist: any phrase with 'watchlist' -> handle it (covers Hinglish)
+        if _re.search(r"\bwatchlist\b", low):
+            return self.cmd_watchlist(raw)
         # "All ai update" / "full update" = live books, never Gemini
         if _re.search(r"\b(model|models|yourself|universe)\b", s):
             pass
@@ -1340,7 +1499,9 @@ class SwingEngine:
         p = self.book.positions[ts]
         msg = (f"{'🔴 LIVE' if self.live else '🟢 PAPER'} BUY {ts} x{qty} @{px:.2f}\n"
                f"SL {p['sl']:.2f} (-{s.swing_sl_pct}%) | T1 {p['t1px']:.2f} | T2 {p['t2px']:.2f}")
-        self.app.alert(msg)
+        # telegram trades already reply with this msg; don't double-send via alert
+        if "telegram" not in (source or "").lower() and "approved" not in (source or "").lower():
+            self.app.alert(msg)
         return msg
 
     def add_position(self, ts: str, tok: str, qty: int, px: float, source: str) -> str:
@@ -1377,7 +1538,8 @@ class SwingEngine:
                f"SL {p['sl']:.2f} | T1 {p['t1px']:.2f} | T2 {p['t2px']:.2f}"
                f"  (auto-adjusted to new avg)"
                + ("\n🔒 T1 done tha — SL breakeven par rahega." if t1_done else ""))
-        self.app.alert(msg)
+        if "telegram" not in (source or "").lower() and "approved" not in (source or "").lower():
+            self.app.alert(msg)
         return msg
 
     def live_check_blocked(self) -> bool:
@@ -1422,8 +1584,10 @@ class SwingEngine:
         left = self.book.positions.get(ts)
         tail = (f" | remaining x{left['remaining']:g} @ avg {left['entry']:.2f}"
                 if left else "")
-        self.app.alert(f"{'🔴 LIVE' if self.live else '🟢 PAPER'} EXIT {ts} x{q} "
-                       f"@{px:.2f} ({reason}) P&L {pnl:+.2f}{tail}")
+        # telegram sells already reply; background guardians/tasks still alert
+        if "telegram" not in (reason or "").lower() and "approved" not in (reason or "").lower():
+            self.app.alert(f"{'🔴 LIVE' if self.live else '🟢 PAPER'} EXIT {ts} x{q} "
+                           f"@{px:.2f} ({reason}) P&L {pnl:+.2f}{tail}")
         return pnl
 
     def _find_pos(self, short: str):
