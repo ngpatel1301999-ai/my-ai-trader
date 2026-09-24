@@ -16,6 +16,11 @@ import urllib.request
 
 log = logging.getLogger("telegram")
 
+# Render starts the new instance before the old one dies; for a few seconds two
+# pollers hold the same token and Telegram kicks one with HTTP 409 Conflict.
+# Retry through that window instead of staying silently dead.
+CONFLICT_BACKOFF = (8, 12, 16, 20, 25)
+
 TG_LIMIT = 3500
 
 # Telegram allows ONLY ONE getUpdates poller per bot token. If your laptop bot
@@ -507,20 +512,33 @@ class TelegramRemote(threading.Thread):
             self.stopped = True
             log.info("Telegram remote OFF - polling closed cleanly")
 
-        try:
-            asyncio.run(amain())
-        except Exception as e:
-            # Typical causes: bad token -> "Unauthorized"; HTTP 409 -> two bots
-            # are polling with the same token; no outbound network.
-            if _is_conflict(e):
-                self.error = CONFLICT_MSG
-                log.error("TELEGRAM CONFLICT: %s", CONFLICT_MSG)
-                return
-            self.error = f"polling stopped: {e}"
-            log.error("telegram polling stopped: %s", e)
+        # Deploy switchover race: Render can start this instance BEFORE the old
+        # one releases getUpdates. The loser of that race sees Conflict; without
+        # retries the NEW bot would stay silently dead until a manual start.
+        for attempt, wait in enumerate(CONFLICT_BACKOFF):
             try:
-                self.app.alert(f"⚠️ Telegram remote died: {e}\n"
-                               "Check TELEGRAM_BOT_TOKEN (and that the host can "
-                               "reach api.telegram.org:443).")
-            except Exception:
-                pass
+                asyncio.run(amain())
+                return                      # clean shutdown (stop() was called)
+            except Exception as e:
+                if _is_conflict(e):
+                    if self._stop_flag.is_set():
+                        self.stopped = True
+                        return
+                    log.warning("TELEGRAM CONFLICT - old poller still draining; "
+                                "retry %d/%d in %ds", attempt + 1,
+                                len(CONFLICT_BACKOFF), wait)
+                    if self._stop_flag.wait(wait):
+                        self.stopped = True
+                        return              # stop() asked us to quit while waiting
+                    continue
+                self.error = f"polling stopped: {e}"
+                log.error("telegram polling stopped: %s", e)
+                try:
+                    self.app.alert(f"⚠️ Telegram remote died: {e}\n"
+                                   "Check TELEGRAM_BOT_TOKEN (and that the host can "
+                                   "reach api.telegram.org:443).")
+                except Exception:
+                    pass
+                return
+        self.error = CONFLICT_MSG
+        log.error("TELEGRAM CONFLICT persisted through all retries: %s", CONFLICT_MSG)
