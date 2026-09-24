@@ -384,7 +384,23 @@ class CommodityBook:
         if qty <= 0:
             qty = 1
         if name in self.positions:
-            return f"Already holding PAPER {name}. Sell first."
+            # AVERAGING: add to the held paper position, re-price SL/T1 off new avg
+            p = self.positions[name]
+            old_q = float(p.get("qty") or 0)
+            old_avg = float(p.get("entry") or 0)
+            new_q = old_q + qty
+            avg = ((old_avg * old_q + px * qty) / new_q) if new_q > 0 else px
+            p["qty"] = round(new_q, 6)
+            p["entry"] = round(avg, 4)
+            p["sl"] = round(avg * 0.98, 4)
+            p["t1"] = round(avg * 1.05, 4)
+            p["src"] = snap.get("src", p.get("src", ""))
+            self.save()
+            return (f"🟢 PAPER ADD BUY {name} x{qty:g} @ {snap['ccy']} {px:.2f}/{snap['unit']}\n"
+                    f"NOW x{p['qty']:g} @ avg {snap['ccy']} {p['entry']:.2f} (was {old_avg:.2f})\n"
+                    f"SL {p['sl']:.2f} (-2%) | T1 {p['t1']:.2f} (+5%)  auto-adjusted to new avg\n"
+                    f"Source: {snap.get('src')}\n"
+                    "Not sent to Kotak. Not an MCX live order.")
         sl = round(px * 0.98, 4)
         t1 = round(px * 1.05, 4)
         self.positions[name] = {
@@ -398,7 +414,9 @@ class CommodityBook:
                 f"Source: {snap.get('src')}\n"
                 "Not sent to Kotak. Not an MCX live order.")
 
-    def sell(self, name: str) -> str:
+    def sell(self, name: str, qty: float = 0) -> str:
+        """Exit qty (0 = ALL). Partial exit keeps the rest at the same avg price
+        and books realised P&L only on the sold part — like a real broker book."""
         p = self.positions.get(name)
         if not p:
             return f"No PAPER {name} position."
@@ -406,12 +424,21 @@ class CommodityBook:
         px = snap.get("px")
         if not px:
             return "Price unavailable, try later."
-        pnl = (px - p["entry"]) * p["qty"]
-        self.positions.pop(name, None)
-        self.save()
+        have = float(p.get("qty") or 0)
+        q = have if not qty or qty <= 0 else min(float(qty), have)
+        pnl = (px - p["entry"]) * q
         ccy = p.get("ccy", snap.get("ccy", "USD"))
-        return (f"🟢 PAPER EXIT {name} x{p['qty']:g} at {ccy} {px:.2f}  "
-                f"PnL {ccy} {pnl:+.2f}")
+        p["qty"] = round(have - q, 6)
+        if p["qty"] <= 0:
+            self.positions.pop(name, None)
+            self.save()
+            return (f"🟢 PAPER EXIT {name} x{q:g} at {ccy} {px:.2f}  "
+                    f"PnL {ccy} {pnl:+.2f}")
+        self.save()
+        return (f"🟢 PAPER PARTIAL EXIT {name} x{q:g} at {ccy} {px:.2f}  "
+                f"PnL {ccy} {pnl:+.2f}\n"
+                f"Remaining x{p['qty']:g} @ avg {ccy} {p['entry']:.2f} | "
+                f"SL {p.get('sl', 0):.2f} | T1 {p.get('t1', 0):.2f}")
 
     def squareoff_all(self) -> str:
         if not self.positions:

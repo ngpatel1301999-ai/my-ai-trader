@@ -159,6 +159,10 @@ class App:
                 "  /scan_commodity /scan_currency /scan_crypto /tasks_commodity\n"
                 "/buy RELIANCE 5  /buy GOLD 1  /sell SBIN  /sell GOLD\n"
                 "/squareoff_commodity   /sl SBIN 985\n"
+                "AVERAGING: holding me dobara buy = avg price + SL/T1/T2 auto-adjust\n"
+                "  e.g. Buy 50 more IDEA | /buy GOLD 2 (jab GOLD pehle se held ho)\n"
+                "PARTIAL EXIT: held qty ka kuch hissa becho, baaki held rahega\n"
+                "  e.g. Sell 20 qty of IDEA | Sell 5 GOLD | /sell SBIN 10\n"
                 "Space also works: /scan commodity  /tasks commodity\n"
                 "Plain command = EQUITY only.\n"
                 "Chat: research TITAN deeply | news about INFY | is NIFTY a swing buy?\n"
@@ -809,14 +813,14 @@ class App:
         """PAPER gold/silver/crypto. Never a Kotak live MCX order."""
         import re as _re
         low = (text or "").lower()
+        # "50qty" / "qty 50" / "50" / "0.5 oz" — trailing word must not eat the number
+        qty_m = _re.search(r"(\d+(?:\.\d+)?)\s*(?:qty|quantity|lots?|units?|oz|grams?)?\b", low)
         if _re.search(r"\b(buy|long)\b", low):
-            qty = 1.0
-            m = _re.search(r"\b(\d+(?:\.\d+)?)\b", low)
-            if m:
-                qty = float(m.group(1))
+            qty = float(qty_m.group(1)) if qty_m else 1.0
             return self.comm.buy(name, qty)
         if _re.search(r"\b(sell|exit|square|squere)\b", low):
-            return self.comm.sell(name)
+            qty = float(qty_m.group(1)) if qty_m else 0.0
+            return self.comm.sell(name, qty)
         return self.comm.quote(name)
 
     def _task_ids(self, text: str) -> list:
@@ -1091,6 +1095,15 @@ class App:
                 qty = int(args.get("qty") or 0)   # 0 = auto-size by risk
             except (TypeError, ValueError):
                 qty = 0
+            sym = (args.get("symbol") or "").upper().replace("-EQ", "")
+            try:
+                from commodity import SPECS
+                if sym in SPECS:
+                    if tool == "buy":
+                        return self.comm.buy(sym, qty or 1)
+                    return self.comm.sell(sym, qty)
+            except Exception:
+                pass
             return self.user_trade(tool.upper(), args.get("symbol", ""), qty, "ai")
         if tool == "squareoff":
             sym = (args.get("symbol") or "ALL").upper()
@@ -1111,7 +1124,8 @@ class App:
                     "Fix NEO_CONSUMER_KEY in .env + restart (or I auto-retry every 5 min).\n"
                     "Meanwhile I can research, scan web, manage tasks and notes!")
         if side == "SELL":
-            return self.swing.close_by_short(short, 0, f"{source}-EXIT")
+            # qty>0 = partial exit (sell SOME of the holding); qty 0 = full exit
+            return self.swing.close_by_short(short, 0, f"{source}-EXIT", qty=qty)
         ok, why = self.s.ai_may_trade()
         if source in ("ai", "task", "telegram-cmd") and not ok:
             return f"⛔ {why}"
@@ -1124,9 +1138,9 @@ class App:
             guess = difflib.get_close_matches(short.upper().replace("-EQ", ""), pool, n=1)
             hint = f" Did you mean {guess[0]}?" if guess else ""
             return f"Can't find {short}.{hint}"
-        if ts in self.swing.book.positions:
-            return f"Already holding {ts}."
-        if len(self.swing.book.positions) >= self.s.max_swing_positions:
+        holding = ts in self.swing.book.positions
+        # position-count cap applies to NEW entries only — averaging is allowed
+        if not holding and len(self.swing.book.positions) >= self.s.max_swing_positions:
             return "Max swing positions reached."
         px = self.kotak.get_ltps([tok]).get(tok)
         if not px:
@@ -1134,7 +1148,9 @@ class App:
         user_qty = qty > 0
         if source in ("ai", "task", "telegram-cmd"):
             if qty <= 0:
-                qty = self.swing.size_qty(px)   # auto-size from YOUR risk settings
+                if holding:
+                    qty = int(self.swing.book.positions[ts].get("remaining") or 0)
+                qty = qty or self.swing.size_qty(px)   # auto-size from YOUR risk settings
             cap = self.s.ai_max_order_value_rs
             if px * qty > cap and (self.live or not user_qty):
                 qty = max(1, int(cap / px))     # auto-fit inside AI value cap
@@ -1144,8 +1160,10 @@ class App:
             self.proposals[pid] = {"side": side, "ts": ts, "tok": tok, "qty": qty,
                                    "px": px, "at": time.time()}
             send_buttons_sync(self.s.tg_token, self.s.tg_chat_id,
-                              f"⚠️ Approve LIVE BUY?\n{ts} x{qty} @~Rs {px:.2f} (Rs {px*qty:,.0f})", pid)
+                              f"⚠️ Approve LIVE {'ADD' if holding else 'BUY'}? \n{ts} x{qty} @~Rs {px:.2f} (Rs {px*qty:,.0f})", pid)
             return "⚠️ LIVE order needs your Approval — tap ✅/❌ above."
+        if holding:
+            return self.swing.add_position(ts, tok, qty, px, source)
         return self.swing.open_position(ts, tok, qty, px, source)
 
     def approve(self, pid: int) -> str:
@@ -1154,6 +1172,8 @@ class App:
             return "Proposal expired/not found."
         if time.time() - p["at"] > 900:
             return "Proposal expired (15 min). Give the order again."
+        if p["ts"] in self.swing.book.positions:
+            return self.swing.add_position(p["ts"], p["tok"], p["qty"], p["px"], "approved")
         return self.swing.open_position(p["ts"], p["tok"], p["qty"], p["px"], "approved")
 
     def reject(self, pid: int):
@@ -1314,6 +1334,43 @@ class SwingEngine:
         self.app.alert(msg)
         return msg
 
+    def add_position(self, ts: str, tok: str, qty: int, px: float, source: str) -> str:
+        """AVERAGING (like a broker book): buy more of a held position.
+        New weighted-avg entry; SL/T1/T2 re-computed off the new average."""
+        s = self.app.s
+        p = self.book.positions.get(ts)
+        if not p:
+            return self.open_position(ts, tok, qty, px, source)
+        if self.live_check_blocked():
+            return "⛔ Day stopped / killed."
+        if self.live:
+            resp = self.app.kotak.place_order(ts, "B", qty, px * 1.001, product="CNC")
+            if resp is None:
+                return f"❌ LIVE ADD BUY FAILED {ts} — check Neo app."
+        old_q = float(p.get("remaining") or 0)
+        old_avg = float(p.get("entry") or 0)
+        add_q = float(qty)
+        new_q = old_q + add_q
+        avg = ((old_avg * old_q + px * add_q) / new_q) if new_q > 0 else px
+        p["entry"] = round(avg, 2)
+        p["qty"] = float(p.get("qty") or old_q) + add_q
+        p["remaining"] = new_q
+        t1_done = bool(p.get("t1_done"))
+        # T1 already banked half + SL at breakeven? keep SL at the new avg (breakeven)
+        p["sl"] = round(avg, 2) if t1_done else round(avg * (1 - s.swing_sl_pct / 100), 2)
+        p["t1px"] = round(avg * (1 + s.swing_t1_pct / 100), 2)
+        p["t2px"] = round(avg * (1 + s.swing_t2_pct / 100), 2)
+        p["source"] = source
+        self.book.save()
+        self.app.risk.register_entry()
+        msg = (f"{'🔴 LIVE' if self.live else '🟢 PAPER'} ADD BUY {ts} x{qty} @{px:.2f}\n"
+               f"NOW x{new_q:g} @ avg {avg:.2f} (pehle {old_avg:.2f})\n"
+               f"SL {p['sl']:.2f} | T1 {p['t1px']:.2f} | T2 {p['t2px']:.2f}"
+               f"  (auto-adjusted to new avg)"
+               + ("\n🔒 T1 done tha — SL breakeven par rahega." if t1_done else ""))
+        self.app.alert(msg)
+        return msg
+
     def live_check_blocked(self) -> bool:
         ok, _ = self.app.risk.can_enter()
         return not ok
@@ -1353,8 +1410,11 @@ class SwingEngine:
                                "win": 1 if pnl > 0 else 0})
         self.book.save()
         self.app.risk.register_exit_pnl(pnl)
+        left = self.book.positions.get(ts)
+        tail = (f" | remaining x{left['remaining']:g} @ avg {left['entry']:.2f}"
+                if left else "")
         self.app.alert(f"{'🔴 LIVE' if self.live else '🟢 PAPER'} EXIT {ts} x{q} "
-                       f"@{px:.2f} ({reason}) P&L {pnl:+.2f}")
+                       f"@{px:.2f} ({reason}) P&L {pnl:+.2f}{tail}")
         return pnl
 
     def _find_pos(self, short: str):
@@ -1401,7 +1461,8 @@ class SwingEngine:
                 f"T1 {old[1]:.2f}->{p['t1px']:.2f} | T2 {old[2]:.2f}->{p['t2px']:.2f}"
                 f"{extra}\n{self.app.cmd_positions()}")
 
-    def close_by_short(self, short: str, px: float, reason: str) -> str:
+    def close_by_short(self, short: str, px: float, reason: str, qty: int = 0) -> str:
+        """qty=0 -> full exit. qty>0 -> partial exit, rest stays at same avg."""
         ts, tok = self.app.short_to_trading(short)
         if not ts or ts not in self.book.positions:
             return f"No swing position in {short}."
@@ -1409,7 +1470,14 @@ class SwingEngine:
             px = self.app.kotak.get_ltps([tok]).get(tok, 0)
         if not px:
             return "Price unavailable."
-        pnl = self._exit(ts, px, reason)
+        have = int(self.book.positions[ts].get("remaining") or 0)
+        q = have if qty <= 0 else min(int(qty), have)
+        pnl = self._exit(ts, px, reason, q)
+        left = self.book.positions.get(ts)
+        if left:
+            return (f"Sold x{q} of {ts} @{px:.2f}  P&L {pnl:+.2f}\n"
+                    f"Remaining x{left['remaining']:g} @ avg {left['entry']:.2f} | "
+                    f"SL {left['sl']:.2f} | T1 {left['t1px']:.2f} | T2 {left['t2px']:.2f}")
         return f"Closed {ts} P&L {pnl:+.2f}"
 
     def guardian_tick(self, ltps: dict):

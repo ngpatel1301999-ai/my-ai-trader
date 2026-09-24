@@ -677,10 +677,11 @@ def rule_actions(text: str):
         return [{"tool": "help", "args": {}}]
     if "square" in t or "close all" in t:
         return [{"tool": "squareoff", "args": {"symbol": "ALL"}}]
-    m = re.search(r"\b(buy|sell)\s+(\d+)?\s*([a-z&]+)", t)
+    t2 = re.sub(r"(?:qty|quantity|shares?|lots?|units?)\b", " ", t)
+    m = re.search(r"\b(buy|sell)\s+(\d+(?:\.\d+)?)?\s*(?:of\s+)?([a-z&][a-z&.-]*)", t2)
     if m and "if " not in t:
         return [{"tool": m.group(1), "args": {"symbol": m.group(3).upper(),
-                                              "qty": int(m.group(2) or 0)}}]
+                                              "qty": int(float(m.group(2) or 0))}}]
     m = re.search(r"(buy|sell|alert|notify)?\s*(\d+)?\s*([a-z&]+)\s+if\s+(above|below)\s+([\d.]+)", t)
     if m:
         verb = m.group(1) or "notify"
