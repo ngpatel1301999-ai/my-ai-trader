@@ -184,6 +184,8 @@ class CommodityBook:
     def save(self):
         try:
             json.dump(self.positions, open(POS_FILE, "w"), indent=1)
+            import state_sync
+            state_sync.mark("commodity_positions.json")
         except Exception as e:
             log.warning("commodity save: %s", e)
 

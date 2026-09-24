@@ -11,3 +11,11 @@ brief_*.md
 logs/
 trades.log
 supervise.log
+
+# bot state: the bot auto-commits these to GitHub itself (state_sync.py).
+# Laptop must never push stale copies over the bot's backup.
+swing_positions.json
+commodity_positions.json
+tasks.json
+commodity_tasks.json
+swing_trades.csv

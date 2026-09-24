@@ -13,6 +13,7 @@ import os
 from datetime import datetime
 
 import paths
+import state_sync
 
 log = logging.getLogger("swing")
 
@@ -219,6 +220,7 @@ class SwingBook:
         try:
             with open(POS_FILE, "w") as f:
                 json.dump(self.positions, f, indent=1)
+            state_sync.mark("swing_positions.json")
         except Exception as e:
             log.warning("positions save failed: %s", e)
 
@@ -230,6 +232,7 @@ class SwingBook:
             if new:
                 w.writeheader()
             w.writerow(row)
+        state_sync.mark("swing_trades.csv")
 
     def accuracy(self) -> dict:
         if not os.path.exists(TRADES_FILE):

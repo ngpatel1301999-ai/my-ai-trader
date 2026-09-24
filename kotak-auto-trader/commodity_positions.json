@@ -1,12 +1,14 @@
 {
  "GOLD": {
-  "qty": 100.0,
-  "entry": 4394.0,
-  "sl": 4306.12,
-  "t1": 4613.7,
+  "qty": 50.0,
+  "entry": 4319.7,
+  "sl": 4233.306,
+  "t1": 4535.685,
   "ccy": "USD",
   "unit": "oz",
   "yahoo": "GC=F",
-  "mode": "paper"
+  "mode": "paper",
+  "src": "Yahoo COMEX (Kotak MCX unavailable)",
+  "date_in": "2026-09-23"
  }
 }

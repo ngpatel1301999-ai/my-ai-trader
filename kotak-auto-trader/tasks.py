@@ -57,6 +57,8 @@ class TaskEngine:
         try:
             with open(self.path, "w") as f:
                 json.dump({"next_id": self._next_id, "tasks": self.tasks}, f, indent=1)
+            import state_sync
+            state_sync.mark(os.path.basename(self.path))
         except Exception as e:
             log.warning("tasks save failed: %s", e)
 

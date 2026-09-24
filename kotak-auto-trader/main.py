@@ -2173,6 +2173,29 @@ def serve_web():
     host = os.getenv("HOST", "0.0.0.0")
     print(f"BUILD main={MAIN_BUILD} agent={AGENT_BUILD} kotak_client={KC_BUILD}")
     print(f"Web on http://{host}:{port}  |  data dir: {paths.data_dir()}")
+    # durable state: auto-commit book to GitHub so restarts never eat positions
+    import state_sync
+    state_sync.start()
+    import atexit
+    import signal
+
+    def _flush_state(*_a):
+        try:
+            state_sync.flush()
+        except Exception:
+            pass
+
+    atexit.register(_flush_state)
+
+    def _on_term(signum, frame):
+        log.info("SIGTERM - flushing state backup to GitHub before shutdown...")
+        _flush_state()
+        raise SystemExit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+    except Exception:
+        pass
     # workers=1 on purpose: more workers = more bots = duplicate Telegram replies
     uvicorn.run(web_app, host=host, port=port, workers=1, log_level="info")
 
