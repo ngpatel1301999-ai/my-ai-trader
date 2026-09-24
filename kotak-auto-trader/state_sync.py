@@ -1,28 +1,38 @@
 """Durable state for Render's FREE plan (positions/tasks survive restarts).
 
 WHY: a free Render web service has an EPHEMERAL filesystem. Every deploy or
-spin-down wipes the data files, and the bot then reloads the OLD snapshot
-that happens to be committed in git - freshly bought positions "disappear"
-from Telegram AND the dashboard. That is the bug this module kills.
+spin-down wipes the data files, and the bot then reloads whatever stale copy
+is in git - freshly bought positions "disappear" from Telegram AND the
+dashboard. This module kills that bug for good.
 
-HOW: after every book save we re-commit the state files to GitHub through
-the contents API (fine-grained PAT with Contents: Read and write on this
-one repo only). The next deploy / spin-up checks out that commit, so the
-book comes back exactly as it was.
+BACKENDS (first one configured wins):
+  1. MongoDB Atlas (free M0):  MONGO_URI env  <- recommended, permanent cloud
+  2. GitHub contents API:      GH_STATE_TOKEN env (fine-grained PAT)
+  none set -> silent no-op, local laptop runs are never touched.
+
+BEHAVIOUR
+  * every book save() marks the file dirty; a background thread uploads it
+    (debounced ~60s), and SIGTERM / shutdown flushes immediately
+  * on boot, if Mongo is configured, the cloud copy is written back over the
+    local (freshly wiped) files BEFORE the books are loaded - so what you
+    bought yesterday is still there today
+  * a SELL removes the position from the stored book (that is the "delete");
+    closed trades stay forever in swing_trades (journal / win-rate history)
 
 Env (Render -> Environment):
-  GH_STATE_TOKEN   fine-grained PAT (Contents: Read and write)
-  GH_STATE_REPO    owner/repo   (default ngpatel1301999-ai/my-ai-trader)
-  GH_STATE_BRANCH  default main
-No token set -> silent no-op, so local laptop runs are never touched.
+  MONGO_URI    mongodb+srv://user:pass@cluster0.xxxx.mongodb.net/  (Atlas)
+  MONGO_DB     database name (default "trader")
+  GH_STATE_TOKEN / GH_STATE_REPO / GH_STATE_BRANCH  (github fallback)
 """
 import base64
+import json
 import logging
 import os
 import threading
 import time
-
-import requests
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 
 log = logging.getLogger("state_sync")
 
@@ -36,14 +46,20 @@ QUIET = 5.0       # wait a few s after a save before pushing (batch writes)
 STATE_FILES = ["swing_positions.json", "commodity_positions.json",
                "tasks.json", "commodity_tasks.json", "swing_trades.csv"]
 
-_enabled = None
+_mongo_client = None
+
+
+# ---------------- backend selection ----------------
+def backend():
+    if os.getenv("MONGO_URI", "").strip():
+        return "mongo"
+    if os.getenv("GH_STATE_TOKEN", "").strip():
+        return "github"
+    return None
 
 
 def enabled() -> bool:
-    global _enabled
-    if _enabled is None:
-        _enabled = bool(os.getenv("GH_STATE_TOKEN", "").strip())
-    return _enabled
+    return backend() is not None
 
 
 def repo() -> str:
@@ -64,6 +80,55 @@ def mark(filename: str):
             DIRTY[rel] = time.time()
 
 
+# ---------------- MongoDB Atlas backend ----------------
+def _mongo_db():
+    global _mongo_client
+    if _mongo_client is None:
+        import pymongo
+        _mongo_client = pymongo.MongoClient(os.getenv("MONGO_URI").strip(),
+                                            serverSelectionTimeoutMS=8000)
+        _mongo_client.admin.command("ping")   # fail fast on bad creds/network
+    dbn = (os.getenv("MONGO_DB") or "trader").strip()
+    return _mongo_client[dbn]
+
+
+def _coll(rel: str):
+    return _mongo_db()[rel.replace(".", "_")]
+
+
+def _mongo_push(rel: str, text: str) -> bool:
+    try:
+        _coll(rel).replace_one(
+            {"_id": "book"},
+            {"_id": "book", "data": text,
+             "updated": datetime.now(timezone.utc).isoformat()},
+            upsert=True)
+        return True
+    except Exception as e:
+        log.warning("state_sync: mongo push %s failed: %s", rel, e)
+        return False
+
+
+def restore_on_boot():
+    """Cloud copy -> local files, BEFORE any book is loaded.
+    Mongo is the source of truth while MONGO_URI is set."""
+    if backend() != "mongo":
+        return
+    import paths
+    for rel in STATE_FILES:
+        try:
+            doc = _coll(rel).find_one({"_id": "book"})
+            if not doc or not doc.get("data"):
+                continue
+            with open(paths.data_path(rel), "w") as f:
+                f.write(doc["data"])
+            log.info("state_sync: restored %s from MongoDB (saved %s)",
+                     rel, doc.get("updated", "?"))
+        except Exception as e:
+            log.warning("state_sync: restore %s failed: %s", rel, e)
+
+
+# ---------------- GitHub contents-API backend (fallback) ----------------
 def _headers() -> dict:
     return {"Authorization": f"Bearer {os.getenv('GH_STATE_TOKEN', '')}",
             "Accept": "application/vnd.github+json",
@@ -74,44 +139,69 @@ def _api_url(rel: str) -> str:
     return f"https://api.github.com/repos/{repo()}/contents/kotak-auto-trader/{rel}"
 
 
-def _get_sha(rel: str):
+def _req(method: str, url: str, payload=None):
+    """stdlib HTTP (no `requests` on Render). Returns (status, body_text)."""
+    data = json.dumps(payload).encode() if payload is not None else None
+    hdrs = dict(_headers())
+    if data is not None:
+        hdrs["Content-Type"] = "application/json"
+    rq = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     try:
-        r = requests.get(_api_url(rel) + f"?ref={branch()}", headers=_headers(), timeout=20)
-        if r.status_code == 200:
-            return r.json().get("sha")
+        with urllib.request.urlopen(rq, timeout=40) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, e.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            return e.code, ""
     except Exception as e:
-        log.warning("state_sync: sha lookup %s failed: %s", rel, e)
+        return 0, str(e)
+
+
+def _get_sha(rel: str):
+    status, body = _req("GET", _api_url(rel) + f"?ref={branch()}")
+    if status == 200:
+        try:
+            return json.loads(body).get("sha")
+        except Exception:
+            return None
+    if status not in (404, 0):
+        log.warning("state_sync: sha lookup %s -> HTTP %s %s", rel, status, body[:120])
     return None
 
 
+def _github_push(rel: str, text: str) -> bool:
+    body = {"message": f"state: auto-backup {rel} [bot]",
+            "content": base64.b64encode(text.encode()).decode(),
+            "branch": branch()}
+    sha = _get_sha(rel)
+    if sha:
+        body["sha"] = sha
+    status, txt = _req("PUT", _api_url(rel), body)
+    if status in (200, 201):
+        return True
+    if status == 409:      # someone committed in between - retry once
+        sha2 = _get_sha(rel)
+        if sha2:
+            body["sha"] = sha2
+            status, txt = _req("PUT", _api_url(rel), body)
+            if status in (200, 201):
+                return True
+    log.warning("state_sync: push %s -> HTTP %s %s", rel, status, txt[:150])
+    return False
+
+
+# ---------------- shared flush loop ----------------
 def push_one(rel: str) -> bool:
     import paths
     fp = paths.data_path(rel)
     if not os.path.exists(fp):
         return False
-    with open(fp, "rb") as f:
-        data = f.read()
-    body = {"message": f"state: auto-backup {rel} [bot]",
-            "content": base64.b64encode(data).decode(),
-            "branch": branch()}
-    sha = _get_sha(rel)
-    if sha:
-        body["sha"] = sha
-    try:
-        r = requests.put(_api_url(rel), headers=_headers(), json=body, timeout=40)
-        if r.status_code in (200, 201):
-            return True
-        if r.status_code == 409:      # someone committed in between - retry once
-            sha2 = _get_sha(rel)
-            if sha2:
-                body["sha"] = sha2
-                r = requests.put(_api_url(rel), headers=_headers(), json=body, timeout=40)
-                if r.status_code in (200, 201):
-                    return True
-        log.warning("state_sync: push %s -> HTTP %s %s", rel, r.status_code, r.text[:150])
-    except Exception as e:
-        log.warning("state_sync: push %s failed: %s", rel, e)
-    return False
+    with open(fp, "r", errors="replace") as f:
+        text = f.read()
+    if backend() == "mongo":
+        return _mongo_push(rel, text)
+    return _github_push(rel, text)
 
 
 def flush():
@@ -126,7 +216,7 @@ def flush():
             with LOCK:
                 DIRTY.pop(rel, None)
                 LAST_OK[rel] = time.time()
-            log.info("state_sync: %s backed up to GitHub", rel)
+            log.info("state_sync: %s backed up to %s", rel, backend())
 
 
 def _loop():
@@ -139,12 +229,12 @@ def _loop():
 
 
 def start():
-    if not enabled():
-        log.info("state_sync: no GH_STATE_TOKEN - state stays on local disk only "
-                 "(Render restarts WILL wipe it). Add the token in Render -> Environment.")
+    b = backend()
+    if not b:
+        log.info("state_sync: no MONGO_URI / GH_STATE_TOKEN - state stays on local "
+                 "disk only (Render restarts WILL wipe it).")
         return
-    # back up the current book immediately, not just on the next trade
-    for rel in STATE_FILES:
+    for rel in STATE_FILES:          # back up current book right away
         mark(rel)
     threading.Thread(target=_loop, daemon=True, name="state-sync").start()
-    log.info("state_sync: auto-backup ON -> %s @ %s", repo(), branch())
+    log.info("state_sync: auto-backup ON (backend=%s)", b)

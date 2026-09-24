@@ -61,6 +61,15 @@ from commodity import (CommodityBook, pick_name as pick_commodity, wants_commodi
                        asking_hours, hours_kind, hours_report,
                        FX_NAMES, CRYPTO_NAMES, MCX_NAMES)
 
+# Restore the trading book from MongoDB Atlas BEFORE any book is loaded.
+# Render's free disk is wiped on every deploy/spin-down; the cloud copy is
+# the source of truth. No MONGO_URI set -> silent no-op.
+try:
+    import state_sync as _state_sync_boot
+    _state_sync_boot.restore_on_boot()
+except Exception as _e:  # never let a backup problem stop the bot
+    print(f"state_sync restore skipped: {_e}")
+
 IST = ZoneInfo("Asia/Kolkata")
 
 COMMON_SYMBOLS = ["RELIANCE", "INFY", "TCS", "HDFCBANK", "TMPV", "TMCV", "SBIN",

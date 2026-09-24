@@ -20,3 +20,7 @@ tzdata>=2024.1        # ZoneInfo("Asia/Kolkata") on hosts without a system tz da
 
 # flask is NOT needed any more: app.py is now a thin wrapper around FastAPI.
 # (left out on purpose — one server, one port, one bot.)
+
+# --- durable state: MongoDB Atlas free tier (state_sync.py) ---
+pymongo>=4.6,<5
+dnspython>=2.6,<3      # needed for mongodb+srv:// connection strings
